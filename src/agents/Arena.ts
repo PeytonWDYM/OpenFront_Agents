@@ -50,6 +50,19 @@ export const ObserveWorldQuerySchema = ObserveQuerySchema.extend({
       "Choose playerId focus, a coordinate region, or nukePreview. These view selectors cannot be combined.",
   },
 );
+export const ThinkQuerySchema = z
+  .object({
+    note: z
+      .string()
+      .trim()
+      .min(1)
+      .max(600)
+      .describe(
+        "Brief strategy summary. Record a goal or next step, not detailed reasoning.",
+      ),
+    observe: ObserveWorldQuerySchema.optional(),
+  })
+  .strict();
 const message = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
 
@@ -154,6 +167,12 @@ export class Arena {
                   description:
                     "Read current own resources, victory progress, public leaderboard, trade traffic, map and unit levels, native legality, costs, and communication choices. Select sections or a region. Request image or nukePreview for a focused map.",
                   inputSchema: z.toJSONSchema(ObserveWorldQuerySchema),
+                },
+                {
+                  name: "think",
+                  description:
+                    "Record a brief strategy note before costly naval, nuclear, or diplomatic choices. Optionally request a focused observation with the same privacy rules as observe_world. Uses one tool call. Does not submit actions. Act directly for routine decisions to save usage.",
+                  inputSchema: z.toJSONSchema(ThinkQuerySchema),
                 },
                 {
                   name: "act",
@@ -326,14 +345,23 @@ export class Arena {
         void this.runtime!.interrupt(player.threadId).catch(() => {});
       throw new Error("The four-tool-call limit ended this decision.");
     }
-    if (name === "observe_world") {
+    let observationQuery: z.infer<typeof ObserveWorldQuerySchema> | undefined;
+    if (name === "think") {
+      const { note, observe } = ThinkQuerySchema.parse(args);
+      this.logs.add(id, "think", note);
+      if (observe === undefined) return { data: { recorded: true } };
+      observationQuery = observe;
+    } else if (name === "observe_world") {
+      observationQuery = ObserveWorldQuerySchema.parse(args);
+    }
+    if (observationQuery !== undefined) {
       const {
         quickChatKeys: includeQuickChatKeys,
         image,
         nukePreview,
         playerId,
         ...region
-      } = ObserveWorldQuerySchema.parse(args);
+      } = observationQuery;
       const focus =
         playerId !== undefined
           ? this.game!.playerFocus(id, playerId)
