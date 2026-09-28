@@ -87,6 +87,19 @@ This will:
 - Launch the game server with development settings
 - Open the game in your default browser (to disable this behavior, set `SKIP_BROWSER_OPEN=true` in your environment)
 
+### Local Codex players
+
+This fork supports private local lobbies with `gpt-6-luna` players at low reasoning.
+Each player has a persistent Codex thread and uses native game actions and Quick Chat.
+
+```bash
+npm run dev:agents
+```
+
+Open `http://localhost:9000` and select **Agent lobby**. Create a lobby, then choose **Play** or **Spectate**.
+The panel shows player threads, actions, token usage, and compaction controls.
+See [the arena guide](docs/AgentArena.md) for budgets and tests, and [the fork setup](docs/ForkSetup.md) for this machine's PowerShell toolchain.
+
 ### Client Only
 
 To run just the client with hot reloading:
