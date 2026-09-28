@@ -150,6 +150,8 @@ export interface AgentEvent {
     | "alliance_extension_request"
     | "unit_incoming"
     | "nuke_incoming"
+    | "nuke_impact"
+    | "eliminated"
     | "incoming_attack"
     | "attack_request"
     | "emoji"
@@ -268,6 +270,13 @@ export interface AgentObservation {
       upgradeId: number | false;
     }[];
     buildCosts: { type: string; cost: number }[];
+    publicStructures?: {
+      id: number;
+      type: string;
+      tile: number;
+      level: number;
+      ownerId: string;
+    }[];
   };
   events: AgentEvent[];
 }

@@ -18,6 +18,14 @@ export interface ArenaJoin {
   spectator: boolean;
 }
 
+export interface AgentTokenUsage {
+  inputTokens: number;
+  cachedInputTokens: number;
+  cacheWriteInputTokens: number;
+  outputTokens: number;
+  reasoningOutputTokens: number;
+}
+
 export interface AgentPlayer {
   id: string;
   clientId: string;
@@ -26,6 +34,7 @@ export interface AgentPlayer {
   status: string;
   alive: boolean;
   tokens: number;
+  tokenUsage?: AgentTokenUsage;
   decisions: number;
   lastAction?: string;
   error?: string;
@@ -38,6 +47,7 @@ export interface ArenaSnapshot {
   settings: ArenaSettings;
   runtime: { authenticated: boolean; models: string[]; error?: string };
   totalTokens: number;
+  tokenUsage?: AgentTokenUsage;
   error?: string;
 }
 

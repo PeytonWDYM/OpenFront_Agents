@@ -65,8 +65,11 @@ export class TurnQueue {
 
   private pump() {
     if (!this.running) return;
+    // Earlier deadlines get a slot before newer urgent turns can repeat.
     this.pending.sort(
-      (a, b) => Number(b.wakeRequested) - Number(a.wakeRequested),
+      (a, b) =>
+        a.nextAt - b.nextAt ||
+        Number(b.wakeRequested) - Number(a.wakeRequested),
     );
     let scanned = this.pending.length;
     while (

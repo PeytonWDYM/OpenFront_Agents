@@ -2,15 +2,19 @@ import { getSpawnTiles } from "../../core/execution/Util";
 import {
   AllPlayers,
   Game,
+  Nukes,
   Player,
   PlayerBuildable,
   PlayerType,
+  Structures,
+  UnitType,
 } from "../../core/game/Game";
 import { AgentEvent, AgentObservation, ObserveQuery } from "./schemas";
 
 /** Static samples are shared by all seats. Ownership checks use the live mirror. */
 export class ObservationBuilder {
   private candidates: number[] = [];
+  private coastalCandidates: number[] = [];
 
   constructor(private game: Game) {
     for (let y = 8; y < game.height(); y += 24) {
@@ -19,6 +23,17 @@ export class ObservationBuilder {
         if (game.isLand(tile) && !game.isImpassable(tile))
           this.candidates.push(tile);
       }
+    }
+    const coastalBuckets = new Set<number>();
+    const columns = Math.ceil(game.width() / 24);
+    for (let tile = 0; tile < game.width() * game.height(); tile++) {
+      if (!game.isLand(tile) || !game.isShore(tile) || game.isImpassable(tile))
+        continue;
+      const bucket =
+        Math.floor(game.x(tile) / 24) + columns * Math.floor(game.y(tile) / 24);
+      if (coastalBuckets.has(bucket)) continue;
+      coastalBuckets.add(bucket);
+      this.coastalCandidates.push(tile);
     }
   }
 
@@ -81,15 +96,7 @@ export class ObservationBuilder {
         sharedBorders.add(game.ownerID(neighbor));
     }
     const priority = (rival: Player) =>
-      relevant.has(rival.id())
-        ? 0
-        : sharedBorders.has(rival.smallID())
-          ? 1
-          : rival.type() === PlayerType.Human
-            ? 2
-            : rival.type() === PlayerType.Nation
-              ? 3
-              : 4;
+      relevant.has(rival.id()) ? 0 : sharedBorders.has(rival.smallID()) ? 1 : 2;
     const rivals = game
       .allPlayers()
       .filter((rival) => rival.id() !== player.id() && rival.isAlive());
@@ -144,7 +151,10 @@ export class ObservationBuilder {
           continue;
         buildSites.push({
           type: buildable.type,
-          tile: buildable.canBuild === false ? tile : buildable.canBuild,
+          tile:
+            Nukes.has(buildable.type) || buildable.canBuild === false
+              ? tile
+              : buildable.canBuild,
           cost: Number(buildable.cost),
           upgradeId: buildable.canUpgrade,
         });
@@ -171,6 +181,15 @@ export class ObservationBuilder {
     const y = Math.min(query.y ?? game.y(reference), game.height() - 1);
     const width = Math.min(query.width ?? 64, game.width() - x);
     const height = Math.min(query.height ?? 64, game.height() - y);
+    const regionalUnits =
+      query.sections?.includes("units") === true &&
+      query.x !== undefined &&
+      query.y !== undefined;
+    const withinRegion = (tile: number) =>
+      game.x(tile) >= x &&
+      game.x(tile) < x + width &&
+      game.y(tile) >= y &&
+      game.y(tile) < y + height;
     const stride = Math.max(1, Math.ceil(Math.max(width, height) / 8));
     const cells: AgentObservation["map"]["cells"] = [];
     if (
@@ -195,21 +214,34 @@ export class ObservationBuilder {
       }
     }
     const boatTargets: AgentObservation["map"]["boatTargets"] = [];
-    if (!game.inSpawnPhase() && player.hasSpawned()) {
+    if (
+      !game.inSpawnPhase() &&
+      player.hasSpawned() &&
+      !game.config().isUnitDisabled(UnitType.TransportShip)
+    ) {
+      const coasts = this.coastalCandidates
+        .filter((tile) => ownerId(tile) !== player.id())
+        .sort(
+          (a, b) =>
+            game.euclideanDistSquared(reference, a) -
+            game.euclideanDistSquared(reference, b),
+        )
+        .slice(0, 24);
       const targets = [
         ...cells.map((cell) => cell.tile),
+        ...coasts,
         ...visibleRivals
           .map((rival) => rival.spawnTile())
           .filter((tile): tile is number => tile !== undefined),
       ];
-      for (const tile of targets.slice(0, 16)) {
+      for (const tile of [...new Set(targets)].slice(0, 40)) {
         if (
           ownerId(tile) === player.id() ||
           !game.isLand(tile) ||
           game.isImpassable(tile)
         )
           continue;
-        const launchTile = player.bestTransportShipSpawn(tile);
+        const launchTile = player.canBuild(UnitType.TransportShip, tile);
         if (launchTile !== false)
           boatTargets.push({
             ...point(tile),
@@ -263,6 +295,7 @@ export class ObservationBuilder {
           })),
         units: player
           .units()
+          .filter((unit) => !regionalUnits || withinRegion(unit.tile()))
           .slice(0, 32)
           .map((unit) => ({
             id: unit.id(),
@@ -285,7 +318,8 @@ export class ObservationBuilder {
         tiles: rival.numTilesOwned(),
         allied: player.isAlliedWith(rival),
         sharesBorder: sharedBorders.has(rival.smallID()),
-        canAttack: player.canAttackPlayer(rival),
+        canAttack:
+          sharedBorders.has(rival.smallID()) && player.canAttackPlayer(rival),
         canRequestAlliance: player.canSendAllianceRequest(rival),
         canSendQuickChat: player.canSendQuickChat(rival),
         canSendEmoji: player.canSendEmoji(rival),
@@ -315,6 +349,25 @@ export class ObservationBuilder {
         spawnCandidates,
         borders,
         boatTargets,
+        ...(regionalUnits
+          ? {
+              publicStructures: game
+                .units(Structures.types)
+                .filter(
+                  (unit) =>
+                    unit.owner().id() !== player.id() &&
+                    withinRegion(unit.tile()),
+                )
+                .slice(0, 32)
+                .map((unit) => ({
+                  id: unit.id(),
+                  type: unit.type(),
+                  tile: unit.tile(),
+                  level: unit.level(),
+                  ownerId: unit.owner().id(),
+                })),
+            }
+          : {}),
         buildSites: buildSites.slice(0, 8),
         buildCosts: PlayerBuildable.types.map((type) => ({
           type,

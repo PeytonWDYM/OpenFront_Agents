@@ -1,11 +1,13 @@
 import { z, ZodError } from "zod";
-import { CodexRuntime } from "./codex/index";
+import { CodexRuntime, type GameToolResult } from "./codex/index";
+import { tokenUsage } from "./codex/protocol";
 import { EventLog } from "./EventLog";
 import {
   AgentGame,
   isUrgentAgentEvent,
   projectDecisionObservation,
 } from "./game/index";
+import { NukePreviewRequestSchema } from "./game/nukePreview";
 import type { AgentGameEvent } from "./game/schemas";
 import {
   agentActionToolSchema,
@@ -19,9 +21,35 @@ import { ArenaSettingsSchema, defaultSettings } from "./Settings";
 import { TurnQueue } from "./TurnQueue";
 import type { AgentPlayer, ArenaJoin, ArenaSnapshot } from "./types";
 
-const ObserveWorldQuerySchema = ObserveQuerySchema.extend({
+export const ObserveWorldQuerySchema = ObserveQuerySchema.extend({
   quickChatKeys: z.boolean().optional(),
-});
+  image: z
+    .boolean()
+    .optional()
+    .describe("Return a map image of the requested region."),
+  nukePreview: NukePreviewRequestSchema.optional().describe(
+    "Preview an atom or hydrogen bomb trajectory, blast, and SAM coverage risk. Returns an image.",
+  ),
+  playerId: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      "Focus an image on this native player's current public territory. Do not combine with coordinates or nukePreview. Private sections still describe you.",
+    ),
+}).refine(
+  (query) =>
+    query.playerId === undefined ||
+    (query.nukePreview === undefined &&
+      query.x === undefined &&
+      query.y === undefined &&
+      query.width === undefined &&
+      query.height === undefined),
+  {
+    message:
+      "Choose playerId focus, a coordinate region, or nukePreview. These view selectors cannot be combined.",
+  },
+);
 const message = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
 
@@ -124,13 +152,13 @@ export class Arena {
                 {
                   name: "observe_world",
                   description:
-                    "Read your current world, legal actions, and a bounded map region.",
+                    "Read current own resources, public map and unit levels, native legality, costs, and communication choices. Select sections or a region. Request image or nukePreview for a focused map.",
                   inputSchema: z.toJSONSchema(ObserveWorldQuerySchema),
                 },
                 {
                   name: "act",
                   description:
-                    "Submit a native gameplay intent, request the next decision delay, or both. Stale or illegal actions may fail.",
+                    "Submit native attacks, transports, buildings, upgrades, warship movement, diplomacy, chat, or trade controls with native IDs. Set attackRatio or nextDecisionSeconds when needed. Submission does not guarantee execution.",
                   inputSchema: agentActionToolSchema,
                 },
               ],
@@ -278,7 +306,11 @@ export class Arena {
     }
   }
 
-  private async tool(id: string, name: string, args: unknown) {
+  private async tool(
+    id: string,
+    name: string,
+    args: unknown,
+  ): Promise<GameToolResult> {
     if (
       this.state.phase !== "running" ||
       this.halted.has(id) ||
@@ -295,9 +327,21 @@ export class Arena {
       throw new Error("The four-tool-call limit ended this decision.");
     }
     if (name === "observe_world") {
-      const { quickChatKeys: includeQuickChatKeys, ...region } =
-        ObserveWorldQuerySchema.parse(args);
-      const observation = this.game!.observe(id, region);
+      const {
+        quickChatKeys: includeQuickChatKeys,
+        image,
+        nukePreview,
+        playerId,
+        ...region
+      } = ObserveWorldQuerySchema.parse(args);
+      const focus =
+        playerId !== undefined
+          ? this.game!.playerFocus(id, playerId)
+          : undefined;
+      const observation = this.game!.observe(
+        id,
+        focus ? { ...region, ...focus.region } : region,
+      );
       this.logs.add(
         id,
         "observe",
@@ -305,7 +349,8 @@ export class Arena {
       );
       const sections =
         region.sections ??
-        (region.x !== undefined ||
+        (focus !== undefined ||
+        region.x !== undefined ||
         region.y !== undefined ||
         region.width !== undefined ||
         region.height !== undefined
@@ -317,8 +362,59 @@ export class Arena {
         );
         this.suppliedTicks.set(id, observation.tick);
       }
-      const projected = projectDecisionObservation(observation, sections);
-      return includeQuickChatKeys ? { ...projected, quickChatKeys } : projected;
+      const projected =
+        focus && region.sections === undefined
+          ? {
+              gameId: observation.gameId,
+              tick: observation.tick,
+              spawnPhase: observation.spawnPhase,
+              map: {
+                width: observation.map.width,
+                height: observation.map.height,
+                region: focus.region,
+              },
+            }
+          : projectDecisionObservation(observation, sections);
+      const data = includeQuickChatKeys
+        ? {
+            ...projected,
+            ...(focus ? { target: focus.target } : {}),
+            quickChatKeys,
+          }
+        : { ...projected, ...(focus ? { target: focus.target } : {}) };
+      if (!image && !nukePreview && !focus) return { data };
+      const { x, y, width, height } = observation.map.region;
+      const preview = nukePreview
+        ? await this.game!.visionNukePreview(id, nukePreview)
+        : undefined;
+      const frame = preview
+        ? preview.frame
+        : await this.game!.visionRegion(id, { x, y, width, height });
+      this.logs.add(
+        id,
+        "vision",
+        `Requested map region at tick ${observation.tick}.`,
+        {
+          tick: observation.tick,
+          region: frame.region,
+          mapPixels: frame.mapPixels,
+        },
+        frame.url,
+      );
+      return {
+        data: {
+          ...data,
+          ...(preview ? { nukePreview: preview.metadata } : {}),
+          image: {
+            tick: observation.tick,
+            width: frame.width,
+            height: frame.height,
+            region: frame.region,
+            mapPixels: frame.mapPixels,
+          },
+        },
+        images: [frame],
+      };
     }
     if (name !== "act") throw new Error("Unknown game tool.");
     let result: Awaited<ReturnType<AgentGame["act"]>>;
@@ -333,7 +429,8 @@ export class Arena {
           `Requested the next decision in ${nextDecisionSeconds} seconds.`,
         );
       }
-      if (intent === undefined) return { accepted: true, nextDecisionSeconds };
+      if (intent === undefined)
+        return { data: { accepted: true, nextDecisionSeconds } };
       const actions = this.actions.get(id) ?? 0;
       if (actions >= 2) {
         this.halted.add(id);
@@ -369,7 +466,7 @@ export class Arena {
     const player = this.player(id);
     player.lastAction = JSON.stringify(result.intent);
     this.logs.add(id, "action", `Submitted ${player.lastAction}`, result);
-    return result;
+    return { data: result };
   }
 
   private async decide(id: string) {
@@ -474,11 +571,29 @@ export class Arena {
       JSON.stringify(event),
       event,
     );
-    if (event.type !== "tokens" || typeof event.totalTokens !== "number")
-      return;
-    const delta = Math.max(0, event.totalTokens - player.tokens);
+    if (event.type !== "tokens") return;
+    const { totalTokens, ...usage } =
+      tokenUsage.shape.tokenUsage.shape.total.parse(event);
+    const delta = Math.max(0, totalTokens - player.tokens);
     player.tokens += delta;
+    player.tokenUsage = usage;
     this.state.totalTokens += delta;
+    this.state.tokenUsage = this.state.players.reduce(
+      (combined, seat) => {
+        if (seat.tokenUsage) {
+          for (const key of Object.keys(combined) as (keyof typeof combined)[])
+            combined[key] += seat.tokenUsage[key];
+        }
+        return combined;
+      },
+      {
+        inputTokens: 0,
+        cachedInputTokens: 0,
+        cacheWriteInputTokens: 0,
+        outputTokens: 0,
+        reasoningOutputTokens: 0,
+      },
+    );
   }
 
   private gameEvent(event: AgentGameEvent) {

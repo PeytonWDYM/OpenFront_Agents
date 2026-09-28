@@ -7,6 +7,7 @@ import {
   Turn,
 } from "../../core/Schemas";
 import {
+  Game,
   GameMapSize,
   GameMapType,
   GameMode,
@@ -18,11 +19,12 @@ import {
   GameUpdateType,
   GameUpdateViewData,
 } from "../../core/game/GameUpdates";
-import { MapImages } from "../vision";
+import { MapImages, playerTerritoryRegion } from "../vision";
 import { LocalMapLoader } from "./LocalMapLoader";
 import { PlayerSocket } from "./PlayerSocket";
 import { projectDecisionObservation } from "./decision";
 import { playerEvents } from "./events";
+import { buildNukePreview, NukePreviewRequest } from "./nukePreview";
 import { ObservationBuilder } from "./observation";
 import {
   AgentActionSchema,
@@ -35,6 +37,31 @@ import {
 } from "./schemas";
 
 const ADMIN_KEY = "WARNING_DEV_ADMIN_BOT_KEY_DO_NOT_USE_IN_PRODUCTION";
+/** Resolve a native ID and public territory without reading the target's resources. */
+export function publicPlayerFocus(
+  game: Game,
+  viewer: Player,
+  playerId: string,
+) {
+  if (!game.hasPlayer(playerId))
+    throw new Error(`Unknown player ID: ${playerId}`);
+  const target = game.player(playerId);
+  const region = playerTerritoryRegion(game, target);
+  if (!region) throw new Error("The requested player has no owned territory.");
+  return {
+    region,
+    target: {
+      playerId: target.id(),
+      name: target.displayName(),
+      playerType: target.type(),
+      smallId: target.smallID(),
+      tiles: target.numTilesOwned(),
+      alive: target.isAlive(),
+      allied: viewer.isAlliedWith(target),
+      teammate: viewer.isOnSameTeam(target),
+    },
+  };
+}
 const LobbyResponseSchema = z.object({
   gameID: z.string(),
   workerIndex: z.number().int().min(0).max(1),
@@ -326,6 +353,46 @@ export class AgentGame {
   async vision(agentId: string) {
     const player = this.player(agentId);
     return this.mapImages!.render(this.runner!.game, player);
+  }
+
+  async visionRegion(
+    agentId: string,
+    region: { x: number; y: number; width: number; height: number },
+  ) {
+    return this.mapImages!.renderRegion(
+      this.runner!.game,
+      this.player(agentId),
+      region,
+    );
+  }
+
+  playerFocus(agentId: string, playerId: string) {
+    const viewer = this.player(agentId);
+    return publicPlayerFocus(this.runner!.game, viewer, playerId);
+  }
+
+  async visionNukePreview(agentId: string, request: NukePreviewRequest) {
+    const player = this.player(agentId);
+    const preview = buildNukePreview(this.runner!.game, player, request);
+    const frame = await this.mapImages!.renderNukePreview(
+      this.runner!.game,
+      player,
+      preview,
+    );
+    return {
+      frame,
+      metadata: {
+        type: preview.type,
+        rocketDirectionUp: preview.rocketDirectionUp,
+        target: preview.target,
+        source: preview.source,
+        canBuild: preview.canBuild,
+        blast: preview.blast,
+        betrayedAllyIds: preview.betrayedAllyIds,
+        targetingAlly: preview.targetingAlly,
+        interception: preview.interception,
+      },
+    };
   }
 
   async act(agentId: string, args: unknown, attackRatio?: number) {

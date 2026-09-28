@@ -21,10 +21,18 @@ Full observations include exact resources for the current player, public rival n
 Rival troop totals and gold balances are omitted. Enemy attacks show their attacker and attack ID, without hidden troop totals.
 Limits are 12 border targets, 4 boat targets, 8 build sites, 32 owned units, and 12 events.
 Rivals include all current border players, attackers, allies, requestors, and recent event participants, plus up to 12 ranked players.
-Shared borders and human players rank before nearby nations and tribes. Observations include native player types and communication capabilities.
+Current threats, allies, and shared borders rank first. Remaining players rank by distance without a player-type preference.
+Observations include native player types and communication capabilities.
 An explicit map region returns at most 64 terrain samples. Sample coordinates use native map coordinates and tile references.
 Request `observe_world({ "quickChatKeys": true })` to read the supported chat keys when needed.
 Request `observe_world({ "sections": ["communication"] })` for native chat keys and numeric emoji indexes.
+Add `image: true` to a region query to receive a bounded map image through the native Codex image tool response.
+Use `observe_world({ "playerId": nativePlayerId })` to focus on a human, nation, or tribe's current territory.
+This query returns a map image and public target metadata. Its affiliation colors retain the requesting agent's viewpoint.
+Unknown IDs and targets without owned territory fail. Do not combine this selector with coordinates or `nukePreview`.
+Additional selected sections still describe the requesting agent. They cannot expose the target's private resources or messages.
+Regional `sections: ["units"]` queries filter owned units before the 32-unit limit and include up to 32 public enemy structures.
+These queries expose native unit IDs, types, tiles, and levels. They omit enemy ships and private resources.
 Spawn candidates use native `getSpawnTiles()`. Build sites and costs use native `buildableUnits()` and `Config.unitInfo()`.
 The event history retains at most 128 events from the last minute. Recipient filters match `EventsDisplay` and `ActionableEvents`.
 
@@ -41,6 +49,18 @@ The grid labels and legend identify positions, ownership, and player types. Lega
 Image labels `H<smallId>`, `N<smallId>`, and `T<smallId>` match the snapshot's public `smallId` values.
 Actions use the corresponding native `playerId`, rather than an image label.
 Frames remain under `.agent-arena/frames/<gameId>/` as repeatable inspection artifacts.
+Structure symbols include their native level, such as `C3` for a level-3 City and `A5` for a level-5 SAM Launcher.
+Owned units and regional public structures also expose exact levels. These upgrade stacks do not represent troops or gold.
+
+Tactical and regional images show public ships, SAM coverage, and own or friendly territory cues.
+Request `observe_world({ "nukePreview": { "type": "Atom Bomb", "tile": targetTile } })` before a planned launch.
+This query returns an image with the selected silo, trajectory, blast radius, estimated interception point, and affected allies.
+`Hydrogen Bomb` is also supported. `rocketDirectionUp` defaults to `true` and must match the eventual build action.
+The preview bounds include the source, target, and curve. The returned image metadata identifies its actual region.
+The compact preview reports native build legality, source and target tiles, blast radii, alliance risk, and estimated interception.
+It reuses native alliance checks and the client's trajectory math. It does not replace the simulation.
+SAM cooldowns, upgrades, and later state changes can alter interception. No displayed interception point does not guarantee a safe launch.
+MIRV actions remain available. The bridge does not invent an Atom Bomb trajectory for MIRVs.
 
 ## Playing
 
@@ -75,13 +95,35 @@ When waiting deliberately, `act({ "nextDecisionSeconds": 1 })` requests timing w
 Each call must supply an intent or timing. An attack ratio requires an intent.
 The delay applies once. Routine decisions return to ten seconds. Timing metadata never enters the native intent.
 Boat actions specify a native destination tile and a troop amount. The engine must find a valid shoreline launch and water route.
-`boatTargets` supplies legal launch hints. `cancel_attack` and `cancel_boat` use the owned attack or ship IDs.
+Transports require owned coastal access, without a Port. `boatTargets` includes legal neutral and rival landing sites.
+The bridge checks each hint with native `canBuild(TransportShip, tile)`. `cancel_attack` and `cancel_boat` use owned attack or ship IDs.
 
 Build actions use `build_unit`, a native unit type, and a tile. Check `buildSites` for the current legal site and cost.
 A first City costs 125,000 gold and normally takes 20 ticks to complete.
 Later structure costs increase with native construction counts. Use the observed cost rather than a remembered price.
 Owned units expose their IDs and upgrade eligibility. `upgrade_structure`, `move_warship`, and `delete_unit` use those IDs.
 The engine enforces ownership, placement, affordability, and cooldowns for every action.
+
+The spawn briefing explains each major structure and unit without a fixed build order:
+
+- Cities increase troop capacity. Ports create sea trade and enable Warships. Connected sea routes can make Ports major income sources.
+- Factories spawn trains between connected City, Port, and Factory stations. Trade and train visits generate gold.
+- Defense Posts strengthen nearby land defense. Their cost competes with capacity and income investments.
+- SAM Launchers intercept supported nuclear missiles. Upgrades increase coverage.
+- Missile Silos launch Atom Bombs, Hydrogen Bombs, and MIRVs when construction, cooldown, and gold permit.
+- Atom Bombs affect a smaller area. Hydrogen Bombs affect a larger area. Both can cause collateral damage and fallout.
+- MIRVs split into warheads aimed at the selected player's territory. Their cost increases after global MIRV launches.
+- Warships patrol water, capture hostile trade for gold, and fight ships or transports. Trade captures also increase veterancy.
+- Transports carry troops to another shore. They require owned coastal access, without a Port.
+- Trade Ships, trains, shells, SAM missiles, and MIRV warheads spawn through their parent structures or attacks.
+
+Nuclear `build_unit` actions use the enemy target tile. The native engine selects the launch silo.
+Build hints preserve that target tile instead of substituting the silo tile returned by the native placement check.
+Agents receive early tribe-conquest guidance, mechanics, and tradeoffs. They choose their own actions and strategy.
+Each City level adds the same capacity. SAM levels add reload slots, while range gains diminish at higher levels.
+Port levels add trade spawning opportunities. Factory levels add train spawning opportunities. Missile Silo levels add reload slots.
+Overlapping Defense Posts do not multiply the same tile's bonus. A post covers land within 30 tiles and adds no City capacity.
+Upgrades count toward construction pricing. Current costs and useful coverage determine the tradeoff between upgrades and additional structures.
 
 Send `allianceRequest` to request an alliance. Send the same action back to accept an incoming request.
 `allianceReject` names the requestor. `allianceExtension` asks to extend an alliance. `breakAlliance` ends one.
@@ -104,6 +146,9 @@ These responses use native `TribeExecution`, nation behavior, and normal diploma
 
 The bridge emits one `incoming_attack` event when a new land attack reaches the player's attack list.
 Recipient-filtered native warnings produce `nuke_incoming` or `unit_incoming` events with available unit and target details.
+Atom Bomb, Hydrogen Bomb, and MIRV warnings count as incoming nuclear threats.
+Native detonation messages produce private `nuke_impact` events only for affected players. Intercepted missiles produce no impact event.
+Native death updates immediately interrupt the eliminated agent and stop later decisions and actions.
 Incoming chat, alliance requests, alliance replies, alliance renewal requests, betrayal, expiry, and donations can wake a decision.
 Outgoing actions and public emojis do not trigger the same recipient wake. Event data never includes rival troop or gold totals.
 
@@ -111,8 +156,8 @@ An `act()` result means the socket submitted the intent. It does not prove that 
 Observe the next native turns to confirm changes, incoming events, and final game results.
 Management intents, kicks, pause, game configuration, and server disconnection intents are excluded from agent actions.
 
-The agent prompt uses native nation behavior as a strategy reference. It teaches expansion, reserves, investment, defense, and diplomacy.
-It asks agents to choose useful actions during quiet decisions and to avoid duplicate attacks against active targets.
+The agent prompt explains expansion, reserves, investment, defense, and diplomacy.
+Nearby non-allied tribes are suggested as early conquest opportunities. No fixed strategy or native bot policy controls agent decisions.
 Agents retain all 20 native player actions, including structures, upgrades, ships, donations, embargos, and diplomacy.
 The model chooses its strategy. The bridge does not copy native nation decision code or select model actions.
 
@@ -128,8 +173,15 @@ Run `npx tsx tests/agents/game-e2e.ts --native-only` without a server or model c
 This driver runs the native map and simulation with eight human agents, 100 tribes, and 52 nations.
 It checks native random spacing, repeatable seeded spawns, tribe alliance acceptance, Quick Chat delivery, and nation emoji replies.
 It checks recipient IDs, relevant rival visibility, resource privacy, and compact snapshot size.
+It launches a transport without a Port, confirms the landing, and verifies a native Atom Bomb target.
+It checks regional retrieval of an owned unit beyond the default limit and public enemy structure visibility.
 It also checks 11 tribes with seven, zero, and 64 nations. Each configured nation must actually spawn.
 The driver writes `.agent-arena/native-population-e2e.json` with its seed, setup, spawns, events, and byte counts.
+
+Run `npx tsx tests/agents/events-e2e.ts` to verify native nuclear warning, impact, privacy, interception, and elimination events.
+The driver writes `.agent-arena/events-e2e.json`. It makes no model request and needs no running server.
+Run `npx tsx tests/agents/vision-e2e.ts` for regional and player-focused images, public ships, structure levels, SAM coverage, and missile previews.
+The driver saves repeatable PNG and JSON artifacts without a model request.
 
 Rules above come from `src/core/configuration/Config.ts`, native execution classes, and the client event filters.
 The bridge imports those rules directly. It does not maintain a separate game simulation.

@@ -19,6 +19,8 @@ It does not change the daily Codex configuration. Each player gets a separate pe
 - Pause when the Codex subscription reports exhausted quota or a rate limit.
 - Keep token usage visible without a configured token limit.
 - Count cumulative token usage by deltas. Do not count repeated notifications twice.
+- Show native input, cached input, cache-write input, output, and reasoning output for each agent and the combined list.
+- Treat cached input and reasoning output as subsets. Derive uncached input from input minus cached input.
 - Stop decisions after elimination or match completion.
 - Limit each decision to four tool calls and two actions. Interrupt a decision that exceeds a limit.
 - Reject attack ratios outside zero to one. Keep each player's ratio separate.
@@ -36,25 +38,36 @@ The arena creates the lobby, joins the native page, and starts after the server 
 Select a player to inspect its thread, tool calls, game events, and token usage.
 The agent list shows combined token usage. Each thread view shows only that player's token usage.
 Usage updates when Codex reports it. Scripted tests do not use model tokens.
+Expand **Usage breakdown** to inspect input, cached input, uncached input, output, and reasoning output.
+Cache-write input appears when positive. Cached input belongs to input, and reasoning output belongs to output.
+Older running arenas keep their headline totals and report that detailed usage is unavailable until the runtime reloads.
 The sidecar listens on `127.0.0.1:9010`. The development client proxies `/api/agents` to it.
 
 The default has four agents, 100 tribes, and 52 nations on the Europe map.
 The agent ceiling is 200. The tribe and nation counts each range from zero to 400.
 The scheduler permits one concurrent decision for each four agents, rounded up, without a fixed concurrency ceiling.
 Each agent decides every 10 seconds after its previous decision completes.
+The queue serves the earliest due turn first. Urgency breaks ties, so event floods cannot starve overdue quiet agents.
 An agent can request its next decision in one to 10 seconds with the action tool's `nextDecisionSeconds` field.
 For example, `act({nextDecisionSeconds: 2})` schedules an earlier check without a gameplay action.
 The agent can also include this field with a normal intent. The last request in that turn wins.
 Each later turn returns to the 10-second default unless the agent requests another delay.
 Agents continue until you pause or stop them, the match ends, or the subscription reports a limit.
 Each decision includes live overview and tactical map images with a small numeric snapshot.
+The bridge reads the latest native tick when a decision starts. Tick updates alone do not request model inference.
+It supplies only events newer than that agent's previous observation. Inspector logs stay local and are not appended to each prompt.
+Earlier decisions remain in the persistent Codex thread and can contribute cached input until native compaction.
 Agents can request focused data when they need exact tiles, costs, or communication choices.
+They can request a regional image or inspect owned units and public enemy structures within that region.
+They can also focus an image on any human, nation, or tribe by its native player ID.
+Focused views show current public territory and keep the requesting agent's private information separate.
 The action tool accepts `attackRatio` as a fraction from zero to one. Each player starts at `0.2`.
 For example, `act({intent: {type: "attack", targetID: null, troops: null}, attackRatio: 0.35})` sends 35% of current troops.
 The player keeps that ratio for later attacks with null troops.
 An explicit troop count applies when the call omits `attackRatio`.
 The inspector shows the same decision images. Frame files remain under `.agent-arena/frames/`.
 Incoming attacks, nukes, chat, and diplomacy can trigger an earlier decision after a five-second cooldown.
+Actual nuclear impacts also wake affected agents. Native elimination updates immediately halt the eliminated agent.
 Events during a decision schedule one fresh decision. Outgoing actions and broadcast emoji do not trigger another decision.
 The arena reports token usage without a configured token limit. Real subscription quota and rate limits still pause decisions.
 Hardware, subscription limits, match duration, and decision costs determine the practical agent count.

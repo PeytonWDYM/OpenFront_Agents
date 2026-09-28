@@ -6,6 +6,7 @@ import type { ArenaSnapshot, PlayerInspector } from "../../src/agents/types";
 
 const base = "http://127.0.0.1:9010/api/agents";
 const codex = process.env.AGENT_E2E_CODEX === "1";
+const schedulerOnly = process.env.AGENT_E2E_SCHEDULER_ONLY === "1";
 const count = Number(process.env.AGENT_E2E_COUNT ?? (codex ? 1 : 8));
 const evidence: Record<string, unknown> = {
   mode: codex ? "codex" : "scripted",
@@ -108,8 +109,80 @@ async function verifyScheduler() {
   }
 }
 
-try {
-  evidence.scheduler = await verifyScheduler();
+// Failure cases: urgent floods must not starve first turns or overdue quiet turns.
+// Earlier readiness deadlines must survive repeated wakes, pause, and resume.
+async function verifyFairness() {
+  const ids = Array.from({ length: 32 }, (_, index) => `fair${index}`);
+  const urgent = ids.slice(0, 30);
+  const quiet = ids.slice(30);
+  const visits: string[] = [];
+  const release = new Map<string, () => void>();
+  const originalNow = Date.now;
+  let now = 100_000;
+  Date.now = () => now;
+  const queue = new TurnQueue(
+    1,
+    () => true,
+    async (id) => {
+      assert.equal(
+        release.has(id),
+        false,
+        "A player cannot have overlapping turns.",
+      );
+      visits.push(id);
+      await new Promise<void>((resolve) => release.set(id, resolve));
+      release.delete(id);
+      if (urgent.includes(id)) return 1_000;
+    },
+  );
+  try {
+    queue.start(ids);
+    for (let turn = 0; turn < 96; turn++) {
+      for (const id of urgent) queue.wake(id);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.equal(queue.activeIds().length, 1);
+      const id = queue.activeIds()[0];
+      now += 1_000;
+      release.get(id)!();
+      await queue.drain();
+      if (turn === 31)
+        assert.ok(
+          quiet.every((id) => visits.includes(id)),
+          "Every initially due player must get a turn within one roster pass.",
+        );
+    }
+    assert.ok(
+      quiet.every((id) => visits.filter((visit) => visit === id).length >= 2),
+      "Quiet players must also get their later due turns during an urgent flood.",
+    );
+    queue.pause();
+    const pausedTurns = visits.length;
+    now += 60_000;
+    queue.wake(urgent[0]);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(visits.length, pausedTurns);
+    queue.start();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(visits.length, pausedTurns + 1);
+    return {
+      players: ids.length,
+      urgentPlayers: urgent.length,
+      turns: visits,
+      quietCounts: quiet.map((id) => ({
+        id,
+        decisions: visits.filter((visit) => visit === id).length,
+      })),
+    };
+  } finally {
+    queue.pause();
+    for (const resolve of release.values()) resolve();
+    await queue.drain();
+    Date.now = originalNow;
+  }
+}
+
+async function verifyArena() {
+  if (schedulerOnly) return;
   const remoteOrigin = await fetch(base, {
     headers: { Origin: "https://example.com" },
   });
@@ -246,28 +319,37 @@ try {
       ),
     );
   }
+}
+
+try {
+  evidence.fairness = await verifyFairness();
+  evidence.scheduler = await verifyScheduler();
+  await verifyArena();
   evidence.result = "passed";
 } catch (error) {
   evidence.result = "failed";
   evidence.error = error instanceof Error ? error.message : String(error);
   process.exitCode = 1;
 } finally {
-  try {
-    evidence.stopped = await request<ArenaSnapshot>("/stop", {});
-  } catch (error) {
-    evidence.stopError = error instanceof Error ? error.message : String(error);
-    evidence.result = "failed";
-    process.exitCode = 1;
+  if (!schedulerOnly) {
+    try {
+      evidence.stopped = await request<ArenaSnapshot>("/stop", {});
+    } catch (error) {
+      evidence.stopError =
+        error instanceof Error ? error.message : String(error);
+      evidence.result = "failed";
+      process.exitCode = 1;
+    }
   }
   await mkdir(".agent-arena", { recursive: true });
-  await writeFile(
-    ".agent-arena/e2e-report.json",
-    JSON.stringify(evidence, null, 2),
-  );
+  const artifact = schedulerOnly
+    ? ".agent-arena/scheduler-report.json"
+    : ".agent-arena/e2e-report.json";
+  await writeFile(artifact, JSON.stringify(evidence, null, 2));
   console.log(
     JSON.stringify({
       result: evidence.result,
-      artifact: ".agent-arena/e2e-report.json",
+      artifact,
       error: evidence.error,
     }),
   );

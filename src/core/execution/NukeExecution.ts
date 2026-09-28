@@ -489,12 +489,15 @@ export class NukeExecution implements Execution {
 
     if (
       this.nukeType === UnitType.AtomBomb ||
-      this.nukeType === UnitType.HydrogenBomb
+      this.nukeType === UnitType.HydrogenBomb ||
+      this.nukeType === UnitType.MIRVWarhead
     ) {
       const messageKey =
         this.nukeType === UnitType.AtomBomb
           ? "events_display.atom_bomb_detonated"
-          : "events_display.hydrogen_bomb_detonated";
+          : this.nukeType === UnitType.HydrogenBomb
+            ? "events_display.hydrogen_bomb_detonated"
+            : "events_display.mirv_warhead_detonated";
       for (const [impactedPlayer] of tilesPerPlayers) {
         mg.displayMessage(
           messageKey,

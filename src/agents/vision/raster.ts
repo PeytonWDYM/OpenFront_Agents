@@ -70,6 +70,80 @@ export class Raster {
       for (let dx = 0; dx < width; dx++) this.pixel(x + dx, y + dy, color);
   }
 
+  /** Clip overlays before drawing, including rings larger than a requested crop. */
+  line(
+    x0: number,
+    y0: number,
+    x1: number,
+    y1: number,
+    color: Color,
+    clip: Region,
+  ) {
+    const dx = x1 - x0,
+      dy = y1 - y0;
+    let start = 0,
+      end = 1;
+    for (const [p, q] of [
+      [-dx, x0 - clip.x],
+      [dx, clip.x + clip.width - 1 - x0],
+      [-dy, y0 - clip.y],
+      [dy, clip.y + clip.height - 1 - y0],
+    ]) {
+      if (p === 0) {
+        if (q < 0) return;
+        continue;
+      }
+      const t = q / p;
+      if (p < 0) start = Math.max(start, t);
+      else end = Math.min(end, t);
+      if (start > end) return;
+    }
+    let x = Math.round(x0 + start * dx),
+      y = Math.round(y0 + start * dy);
+    const tx = Math.round(x0 + end * dx),
+      ty = Math.round(y0 + end * dy);
+    const ax = Math.abs(tx - x),
+      ay = Math.abs(ty - y),
+      sx = x < tx ? 1 : -1,
+      sy = y < ty ? 1 : -1;
+    let error = ax - ay;
+    for (;;) {
+      this.pixel(x, y, color);
+      if (x === tx && y === ty) break;
+      const twice = error * 2;
+      if (twice > -ay) {
+        error -= ay;
+        x += sx;
+      }
+      if (twice < ax) {
+        error += ax;
+        y += sy;
+      }
+    }
+  }
+
+  ellipse(
+    x: number,
+    y: number,
+    rx: number,
+    ry: number,
+    color: Color,
+    clip: Region,
+  ) {
+    for (let step = 0; step < 128; step++) {
+      const a = (step * Math.PI) / 64,
+        b = ((step + 1) * Math.PI) / 64;
+      this.line(
+        x + Math.cos(a) * rx,
+        y + Math.sin(a) * ry,
+        x + Math.cos(b) * rx,
+        y + Math.sin(b) * ry,
+        color,
+        clip,
+      );
+    }
+  }
+
   text(text: string, x: number, y: number, color: Color = [239, 245, 250]) {
     const normalized = text
       .normalize("NFD")

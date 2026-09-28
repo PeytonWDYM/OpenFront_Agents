@@ -17,7 +17,7 @@ import {
 import { agentPanelStyles } from "./AgentPanelStyles";
 import { agentPlayerList } from "./AgentPlayerList";
 import { agentTranscript, agentTranscriptControls } from "./AgentTranscript";
-import { agentTokenUsage } from "./AgentUsage";
+import { agentTokenUsage, agentUsageBreakdown } from "./AgentUsage";
 
 const panelOpenKey = "openfront.agentPanelOpen";
 const pendingGameKey = "openfront.agentPendingGame";
@@ -328,6 +328,13 @@ export class AgentPanel extends LitElement {
                     : "agents.scripted_mode",
                 )}
               </div>
+              <details class="usage-breakdown">
+                <summary>${translateText("agents.usage_breakdown")}</summary>
+                ${agentUsageBreakdown(
+                  lobby.settings.mode,
+                  inspecting ? selectedPlayer?.tokenUsage : lobby.tokenUsage,
+                )}
+              </details>
               <div class="header-actions">
                 ${inspecting
                   ? html`<button

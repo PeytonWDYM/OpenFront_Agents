@@ -48,7 +48,14 @@ Frame files remain under `.agent-arena/frames/<gameId>` for inspection. Event lo
 
 Full history requires at least one user message. Before that message, use `history(threadId, false)` for thread metadata.
 Native Codex stores persistent sessions in the isolated home. The adapter does not replace native history with a summary buffer.
-Native automatic compaction retains the model's context limits. Manual compaction uses `thread/compact/start`.
+Each new runtime sets native `model_context_window` and `model_auto_compact_token_limit` to 150,000, with scope `total`.
+Initialization verifies these settings through native `config/read`. Each player thread receives the same explicit settings.
+These settings limit active context. They do not limit lifetime tokens or game decisions.
+Codex 0.158.0 reserves model headroom and clamps total-scope automatic compaction to 90% of the context window.
+Luna's 95% usable-context setting gives a usable window of 142,500 tokens and an automatic compaction threshold of 135,000 tokens.
+This follows the native [context limits](https://github.com/openai/codex/blob/rust-v0.158.0/codex-rs/protocol/src/openai_models.rs).
+Codex handles compaction and persistent history. Manual compaction uses `thread/compact/start`.
+Existing runtimes retain their startup settings. Changing these settings does not change a running match.
 
 ## Prompt and tool isolation
 
@@ -65,6 +72,13 @@ This uses Codex's supported `model_catalog_json` setting. It does not change the
 All player tools use app-server `dynamicTools` with direct function exposure.
 Tool arguments arrive as `unknown`. The game bridge must validate arguments against its game contracts.
 Unknown tools and callback errors return failed tool results.
+Game tool callbacks return `{ data, images? }`. The runtime sends JSON data as native `inputText` content.
+Image results contain trusted frame paths. The runtime sends those PNG files as native `inputImage` data URLs.
+Missing image files cause a failed tool result. The runtime does not omit a requested image silently.
+`observe_world` can request a regional image with `image: true` and world coordinates.
+The observation builder clamps the region to the map. The renderer keeps the image within 512 pixels.
+The image metadata describes the rendered region. Saved regional frames remain available for inspection.
+An optional `nukePreview` query returns a larger bounded preview around the silo, trajectory, and target without another tool.
 The adapter requires object input schemas and rejects schemas above 5,000 UTF-8 bytes before creating a thread.
 This prevents Codex's tool schema compactor from silently removing the native action fields.
 The exposed action schema stays below that limit. The bridge retains full native validation.
@@ -111,6 +125,7 @@ Codex 0.158.0 exposes no per-response output token limit through this protocol.
 The arena does not impose a token budget. It retains native subscription limit and error handling.
 
 `artifactDirectory` contains `isolation.json`, a JSON definition for each thread, and per-thread JSONL events.
+Inspector events omit inline image data URLs. Native tool responses and persistent thread history retain their images.
 The native session files remain under its `home` directory. The credential copy does not remain after `close()`.
 The runtime drains stderr without copying it into game logs because diagnostics can include account details.
 
@@ -122,6 +137,8 @@ Write and inspect these checks before runtime implementation:
 - The account lacks ChatGPT authentication.
 - The catalog lacks `gpt-6-luna` or its `low` reasoning option.
 - Codex substitutes another model or reasoning effort.
+- Native context settings are ignored, or thread creation loses the 150,000-token configuration.
+- A context window incorrectly becomes a lifetime token or decision budget.
 - A thread loads repository or global instructions, skills, plugins, MCP servers, or native tools.
 - A root union or oversized tool schema reaches thread creation.
 - A tool call uses an unknown tool or invalid arguments.
@@ -137,3 +154,10 @@ Write and inspect these checks before runtime implementation:
 Run `node node_modules/tsx/dist/cli.mjs src/agents/codex/probe.ts` for the initialization and thread configuration probe.
 The default probe makes no inference request. Add `--turn` only for an authorized inference smoke check.
 The probe writes a JSON artifact outside the repository.
+
+Run `node node_modules/tsx/dist/cli.mjs tests/agents/vision-e2e.ts` for native regional map and media-response checks.
+This check creates a native simulation and makes no inference request. It saves a PNG and JSON evidence under `.agent-arena`.
+
+Run `node node_modules/tsx/dist/cli.mjs tests/agents/context-e2e.ts` to verify native context settings and persistent thread creation.
+This check makes no inference request and removes its copied credentials. Its artifact records the settings and thread metadata.
+Automatic compaction at the threshold requires an inference request. This probe verifies configuration without filling a live model context.

@@ -101,6 +101,8 @@ Choose **Play** or **Spectate**.
 The lobby starts after your client joins. Native nations join by default, and random spawns use the game's spacing checks.
 Agents receive live map images and a small state summary. Decisions repeat every ten seconds, with earlier turns for urgent events or agent requests.
 Select an agent to focus the map and inspect its thread. The panel shows actions, token usage, and compaction controls.
+The usage breakdown shows cached and uncached input, output, and reasoning for the selected agent or the combined list.
+New runtimes use a 150,000-token context setting with native compaction. Lifetime tokens and decisions have no configured cap.
 The arena has no configured token cap.
 See [the arena guide](docs/AgentArena.md) for controls and tests, and [the fork setup](docs/ForkSetup.md) for this machine's PowerShell toolchain.
 

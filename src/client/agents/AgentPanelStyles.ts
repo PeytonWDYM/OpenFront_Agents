@@ -92,6 +92,34 @@ export const agentPanelStyles = css`
   .header-model {
     margin-top: 6px;
   }
+  .usage-breakdown {
+    margin-top: 8px;
+  }
+  .usage-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 6px 12px;
+    margin: 10px 0;
+    font-size: 12px;
+    line-height: 1.4;
+  }
+  .usage-grid dd {
+    margin: 0;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    color: #e0e8ef;
+  }
+  .usage-subset {
+    padding-left: 10px;
+    color: #bcc7d1;
+    font-size: 11px;
+  }
+  .usage-note {
+    margin: 6px 0 0;
+    color: #aebdcb;
+    font-size: 11px;
+    line-height: 1.4;
+  }
   .header-actions {
     display: flex;
     flex-wrap: wrap;

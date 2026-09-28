@@ -6,6 +6,12 @@
 // Controls failures: invalid ratios, lost ratio state, wrong percentage forces,
 // changed explicit troop amounts, rounded boat forces, missing actions, and oversized tool schemas.
 // Timing failures: valid short delays rejected, invalid delays accepted, or metadata sent as a native intent.
+// Observation failures: distant humans hide nearby tribes, border opponents disappear,
+// false upgrade IDs become actions, and coastal players cannot find or execute neutral transports.
+// Nuclear failure: a legal launch-silo coordinate replaces the requested enemy target.
+// Land attack failure: permissions expose an attack against a player with no shared land border.
+// Regional units failures: later owned IDs disappear, public structures are missing,
+// or enemy ships and private resources leak into a regional inspection.
 import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
 import { projectDecisionObservation } from "../../src/agents/game/decision";
@@ -26,10 +32,403 @@ import {
   GameMode,
   GameType,
   PlayerType,
+  UnitType,
 } from "../../src/core/game/Game";
 import { createGameRunner } from "../../src/core/GameRunner";
-import { GameStartInfo } from "../../src/core/Schemas";
+import { GameStartInfo, Turn } from "../../src/core/Schemas";
 import { flattenedEmojiTable } from "../../src/core/Util";
+
+async function nativeObservationCheck(start: GameStartInfo) {
+  const fixture = await createGameRunner(
+    {
+      ...start,
+      gameID: "agentViewE2E",
+      config: { ...start.config, nations: 13, startingGold: 5_000_000 },
+      players: Array.from({ length: 32 }, (_, index) => ({
+        clientID: `view${String(index).padStart(4, "0")}`,
+        username: `View ${index}`,
+        clanTag: null,
+      })),
+    },
+    undefined,
+    new LocalMapLoader(),
+    (update) => {
+      if ("errMsg" in update) throw new Error(update.errMsg);
+    },
+  );
+  const advance = (
+    runner: typeof fixture,
+    ticks: number,
+    intents: Turn["intents"] = [],
+  ) => {
+    for (let index = 0; index < ticks; index++) {
+      runner.addTurn({
+        turnNumber: runner.game.ticks(),
+        intents: index === 0 ? intents : [],
+      });
+      assert.ok(runner.executeNextTick());
+    }
+  };
+  advance(fixture, 200);
+  const world = fixture.game;
+  const self = world
+    .allPlayers()
+    .find(
+      (player) =>
+        player.type() === PlayerType.Human &&
+        player.incomingAttacks().length === 0 &&
+        !world
+          .allPlayers()
+          .some((rival) => rival !== player && player.sharesBorderWith(rival)),
+    )!;
+  assert.ok(self, "Fixture has a player without active borders or diplomacy");
+  const nearest = world
+    .allPlayers()
+    .filter((rival) => rival !== self && rival.isAlive())
+    .sort(
+      (a, b) =>
+        world.euclideanDistSquared(self.spawnTile()!, a.spawnTile()!) -
+        world.euclideanDistSquared(self.spawnTile()!, b.spawnTile()!),
+    )
+    .slice(0, 6);
+  assert.ok(
+    nearest.some((rival) => rival.type() === PlayerType.Bot),
+    "Fixture has nearby tribes",
+  );
+  const builder = new ObservationBuilder(world);
+  const initial = projectDecisionObservation(
+    builder.observe("visibility", self, 0, {}, []),
+  );
+  assert.deepEqual(
+    initial.rivals!.map((rival) => rival.playerId),
+    nearest.map((rival) => rival.id()),
+    "Compact rivals reflect nearby public players, regardless of type",
+  );
+  assert.ok(
+    initial.rivals!.every(
+      (rival) => !rival.availableActions.includes("attack"),
+    ),
+    "Distant rivals never offer an unreachable land attack",
+  );
+  assert.ok(initial.map!.buildSites.length > 0);
+  assert.ok(
+    initial.map!.buildSites.every(
+      (site) => !("upgradeId" in site) || typeof site.upgradeId === "number",
+    ),
+    "Missing upgrades never appear as false IDs",
+  );
+  const city = initial.map!.buildSites.find(
+    (site) => site.type === UnitType.City,
+  )!;
+  assert.ok(city);
+  advance(fixture, 30, [
+    {
+      type: "build_unit",
+      unit: UnitType.City,
+      tile: city.tile,
+      clientID: self.clientID()!,
+    },
+  ]);
+  const ownedCity = self.units(UnitType.City)[0];
+  assert.ok(ownedCity && !ownedCity.isUnderConstruction());
+  const upgrade = projectDecisionObservation(
+    builder.observe("visibility", self, 0, {}, []),
+  ).map!.buildSites.find((site) => site.type === UnitType.City);
+  assert.ok(upgrade && "upgradeId" in upgrade);
+  assert.equal(
+    upgrade.upgradeId,
+    ownedCity.id(),
+    "Legal upgrades retain the actual native unit ID",
+  );
+  advance(fixture, 50, [
+    {
+      type: "attack",
+      targetID: null,
+      troops: 10_000,
+      clientID: self.clientID()!,
+    },
+  ]);
+  const siloSite = builder
+    .observe("visibility", self, 0, {}, [])
+    .map.buildSites.find((site) => site.type === UnitType.MissileSilo)!;
+  assert.ok(siloSite);
+  advance(fixture, 1, [
+    {
+      type: "build_unit",
+      unit: UnitType.MissileSilo,
+      tile: siloSite.tile,
+      clientID: self.clientID()!,
+    },
+  ]);
+  for (
+    let index = 0;
+    index < 250 &&
+    !self
+      .units(UnitType.MissileSilo)
+      .some((unit) => !unit.isUnderConstruction());
+    index++
+  )
+    advance(fixture, 1);
+  assert.ok(
+    self
+      .units(UnitType.MissileSilo)
+      .some((unit) => !unit.isUnderConstruction()),
+  );
+  const enemy = world
+    .allPlayers()
+    .find(
+      (player) =>
+        player !== self &&
+        player.type() === PlayerType.Human &&
+        player.isAlive(),
+    )!;
+  const targetTile = enemy.spawnTile()!;
+  const nuclear = builder
+    .observe(
+      "visibility",
+      self,
+      0,
+      { x: world.x(targetTile), y: world.y(targetTile), width: 1, height: 1 },
+      [],
+    )
+    .map.buildSites.find((site) => site.type === UnitType.AtomBomb)!;
+  assert.ok(nuclear);
+  assert.equal(
+    nuclear.tile,
+    targetTile,
+    "A nuclear hint preserves the queried enemy destination, not the launch silo",
+  );
+  advance(fixture, 1, [
+    {
+      type: "build_unit",
+      unit: UnitType.AtomBomb,
+      tile: nuclear.tile,
+      clientID: self.clientID()!,
+    },
+  ]);
+  let missile = self
+    .units(UnitType.AtomBomb)
+    .find((unit) => unit.targetTile() === targetTile);
+  for (let index = 0; index < 10 && !missile; index++) {
+    advance(fixture, 1);
+    missile = self
+      .units(UnitType.AtomBomb)
+      .find((unit) => unit.targetTile() === targetTile);
+  }
+  assert.ok(
+    missile,
+    "Native execution launches an Atom Bomb toward the requested target",
+  );
+  advance(fixture, 1, [
+    {
+      type: "attack",
+      targetID: null,
+      troops: 10_000,
+      clientID: self.clientID()!,
+    },
+  ]);
+  for (
+    let index = 0;
+    index < 600 &&
+    !world
+      .allPlayers()
+      .some((rival) => rival !== self && self.sharesBorderWith(rival));
+    index++
+  )
+    advance(fixture, 1);
+  const borderRivals = world
+    .allPlayers()
+    .filter(
+      (rival) =>
+        rival !== self && rival.isAlive() && self.sharesBorderWith(rival),
+    );
+  assert.ok(
+    borderRivals.length > 0,
+    "Native expansion reaches another player's border",
+  );
+  const bordered = projectDecisionObservation(
+    builder.observe("visibility", self, 0, {}, []),
+  );
+  for (const rival of borderRivals) {
+    const visible = bordered.rivals!.find(
+      (visible) => visible.playerId === rival.id(),
+    );
+    assert.ok(visible?.sharesBorder);
+    assert.equal(
+      visible.availableActions.includes("attack"),
+      self.canAttackPlayer(rival),
+    );
+  }
+  assert.ok(
+    bordered.rivals!.every(
+      (rival) => !("gold" in rival) && !("troops" in rival),
+    ),
+  );
+
+  const boats = await createGameRunner(
+    {
+      ...start,
+      gameID: "boatCheck",
+      config: {
+        ...start.config,
+        bots: 0,
+        nations: "disabled",
+        randomSpawn: false,
+        startingGold: 1_000_000_000,
+      },
+      players: [
+        { clientID: "boat0001", username: "Boat One", clanTag: null },
+        { clientID: "boat0002", username: "Boat Two", clanTag: null },
+      ],
+    },
+    undefined,
+    new LocalMapLoader(),
+    (update) => {
+      if ("errMsg" in update) throw new Error(update.errMsg);
+    },
+  );
+  const sea = boats.game;
+  let shore = -1,
+    inland = -1;
+  for (let tile = 0; tile < sea.width() * sea.height(); tile++) {
+    if (!sea.isLand(tile) || sea.isImpassable(tile)) continue;
+    if (shore < 0 && sea.isShore(tile) && sea.x(tile) > 8 && sea.y(tile) > 8)
+      shore = tile;
+    if (
+      shore >= 0 &&
+      !sea.isShore(tile) &&
+      sea.manhattanDist(shore, tile) > 400
+    ) {
+      inland = tile;
+      break;
+    }
+  }
+  assert.ok(shore >= 0 && inland >= 0);
+  advance(boats, 203, [
+    { type: "spawn", tile: shore, clientID: "boat0001" },
+    { type: "spawn", tile: inland, clientID: "boat0002" },
+  ]);
+  const sailor = sea.playerByClientID("boat0001")!;
+  const boatView = new ObservationBuilder(sea).observe(
+    "boat",
+    sailor,
+    0,
+    {},
+    [],
+  );
+  const landing = boatView.map.boatTargets.find(
+    (target) => target.ownerId === null,
+  )!;
+  assert.ok(
+    landing,
+    "Default observation exposes a reachable neutral coastal landing without rival shore targets",
+  );
+  assert.notEqual(sailor.canBuild(UnitType.TransportShip, landing.tile), false);
+  assert.equal(
+    sailor.unitCount(UnitType.Port),
+    0,
+    "Troop transports need no Port",
+  );
+  advance(boats, 1, [
+    { type: "boat", dst: landing.tile, troops: 2_000, clientID: "boat0001" },
+  ]);
+  let launched = sailor.unitCount(UnitType.TransportShip) > 0;
+  for (
+    let index = 0;
+    index < 800 && sea.ownerID(landing.tile) !== sailor.smallID();
+    index++
+  ) {
+    advance(boats, 1);
+    launched ||= sailor.unitCount(UnitType.TransportShip) > 0;
+  }
+  assert.ok(launched, "Native execution creates a troop transport");
+  assert.equal(
+    sea.ownerID(landing.tile),
+    sailor.smallID(),
+    "The transport lands and occupies the observed destination",
+  );
+  const water = sea.neighbors(landing.tile).find((tile) => sea.isWater(tile))!;
+  const otherWater = sea.neighbors(water).find((tile) => sea.isWater(tile))!;
+  assert.ok(water !== undefined && otherWater !== undefined);
+  for (let index = 0; index < 33; index++)
+    sailor.buildUnit(UnitType.Warship, water, { patrolTile: water });
+  const laterShip = sailor.buildUnit(UnitType.Warship, otherWater, {
+    patrolTile: otherWater,
+  });
+  const opponent = sea.playerByClientID("boat0002")!;
+  const enemyCity = opponent.buildUnit(UnitType.City, inland, {});
+  const enemyShip = opponent.buildUnit(UnitType.Warship, otherWater, {
+    patrolTile: otherWater,
+  });
+  const regionalBuilder = new ObservationBuilder(sea);
+  const defaultUnits = projectDecisionObservation(
+    regionalBuilder.observe("boat", sailor, 0, {}, []),
+  );
+  assert.equal(defaultUnits.units!.length, 32);
+  assert.ok(!defaultUnits.units!.some((unit) => unit.id === laterShip.id()));
+  assert.equal(defaultUnits.publicStructures, undefined);
+  const inspectShip = projectDecisionObservation(
+    regionalBuilder.observe(
+      "boat",
+      sailor,
+      0,
+      {
+        x: sea.x(otherWater),
+        y: sea.y(otherWater),
+        width: 1,
+        height: 1,
+        sections: ["units"],
+      },
+      [],
+    ),
+    ["units"],
+  );
+  assert.ok(
+    inspectShip.units!.some((unit) => unit.id === laterShip.id()),
+    "A regional query reaches an owned ship beyond the default unit limit",
+  );
+  assert.ok(
+    !inspectShip.units!.some((unit) => unit.id === enemyShip.id()),
+    "Foreign ships stay out of owned-unit observations",
+  );
+  const inspectCity = projectDecisionObservation(
+    regionalBuilder.observe(
+      "boat",
+      sailor,
+      0,
+      {
+        x: sea.x(inland),
+        y: sea.y(inland),
+        width: 1,
+        height: 1,
+        sections: ["units"],
+      },
+      [],
+    ),
+    ["units"],
+  );
+  assert.deepEqual(inspectCity.publicStructures, [
+    {
+      id: enemyCity.id(),
+      type: UnitType.City,
+      tile: inland,
+      level: enemyCity.level(),
+      ownerId: opponent.id(),
+    },
+  ]);
+  return {
+    nearest: initial.rivals,
+    borderRivals: borderRivals.map((rival) => rival.id()),
+    upgradeId: ownedCity.id(),
+    nuclear: { id: missile.id(), targetTile },
+    regionalUnits: {
+      laterOwnedShipId: laterShip.id(),
+      publicEnemyStructureId: enemyCity.id(),
+      hiddenEnemyShipId: enemyShip.id(),
+    },
+    transport: { shore, landing, launched, occupied: true, tick: sea.ticks() },
+  };
+}
 
 async function nativePopulationCheck() {
   assert.equal(
@@ -280,6 +679,7 @@ async function nativePopulationCheck() {
     });
   }
   await mkdir(".agent-arena", { recursive: true });
+  const observationChecks = await nativeObservationCheck(start);
   await writeFile(
     ".agent-arena/native-population-e2e.json",
     JSON.stringify(
@@ -299,6 +699,7 @@ async function nativePopulationCheck() {
           nations: nations.length,
         },
         populationCases,
+        observationChecks,
         spawns: humans.map((player) => ({
           id: player.id(),
           tile: player.spawnTile(),

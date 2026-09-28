@@ -189,7 +189,7 @@ describe("NukeExecution", () => {
     displayMessageSpy.mockRestore();
   });
 
-  test("MIRVWarhead detonation does NOT emit NUKE_DETONATED", () => {
+  test("MIRVWarhead detonation reports only its impacted recipient", () => {
     player.buildUnit(UnitType.MissileSilo, game.ref(1, 1), {});
     for (let x = 48; x < 53; x++) {
       for (let y = 48; y < 53; y++) {
@@ -212,7 +212,9 @@ describe("NukeExecution", () => {
     const detonatedCalls = displayMessageSpy.mock.calls.filter(
       (call) => call[1] === MessageType.NUKE_DETONATED,
     );
-    expect(detonatedCalls).toHaveLength(0);
+    expect(detonatedCalls.map((call) => [call[0], call[2], call[6]])).toEqual([
+      ["events_display.mirv_warhead_detonated", otherPlayer.id(), player.id()],
+    ]);
 
     displayMessageSpy.mockRestore();
   });

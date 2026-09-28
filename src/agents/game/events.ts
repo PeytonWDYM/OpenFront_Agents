@@ -20,6 +20,14 @@ export function playerEvents(
   const playerId = (id: number) => game.playerBySmallID(id).id();
   const add = (type: AgentEvent["type"], data: Record<string, unknown>) =>
     events.push({ type, tick: game.ticks(), at: Date.now(), data });
+  if (
+    !game.inSpawnPhase() &&
+    updates[U.Player].some(
+      (update) => update.id === player.id() && update.isAlive === false,
+    )
+  ) {
+    add("eliminated", { playerId: player.id() });
+  }
   if (previousIncoming) {
     const incoming = player.incomingAttacks();
     for (const attack of incoming) {
@@ -43,12 +51,23 @@ export function playerEvents(
   }
   for (const event of updates[U.DisplayEvent]) {
     if (event.playerID === null || event.playerID === self) {
-      add("game", {
-        message: event.message,
-        params: event.params,
-        gold:
-          event.goldAmount === undefined ? undefined : Number(event.goldAmount),
-      });
+      add(
+        event.messageType === MessageType.NUKE_DETONATED
+          ? "nuke_impact"
+          : "game",
+        {
+          message: event.message,
+          params: event.params,
+          ...(event.messageType === MessageType.NUKE_DETONATED &&
+          event.focusPlayerID !== undefined
+            ? { attackerId: playerId(event.focusPlayerID) }
+            : {}),
+          gold:
+            event.goldAmount === undefined
+              ? undefined
+              : Number(event.goldAmount),
+        },
+      );
       if (
         event.playerID === self &&
         event.message === "events_display.wants_to_renew_alliance"
@@ -96,7 +115,8 @@ export function playerEvents(
       const unit = game.unit(event.unitID);
       add(
         event.messageType === MessageType.NUKE_INBOUND ||
-          event.messageType === MessageType.HYDROGEN_BOMB_INBOUND
+          event.messageType === MessageType.HYDROGEN_BOMB_INBOUND ||
+          event.messageType === MessageType.MIRV_INBOUND
           ? "nuke_incoming"
           : "unit_incoming",
         {
@@ -165,6 +185,7 @@ export function isUrgentAgentEvent(
   switch (event.type) {
     case "incoming_attack":
     case "nuke_incoming":
+    case "nuke_impact":
     case "unit_incoming":
     case "alliance_request":
     case "alliance_reply":

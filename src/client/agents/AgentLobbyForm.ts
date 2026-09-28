@@ -59,7 +59,10 @@ export function agentLobbyForm(
         </label>
         <label for="agent-tribes">
           ${translateText("agents.tribes")}
-          <output for="agent-tribes">${settings.tribeCount}</output>
+          <output
+            for="agent-tribes"
+            .value=${String(settings.tribeCount)}
+          ></output>
         </label>
         <input
           id="agent-tribes"
@@ -74,7 +77,10 @@ export function agentLobbyForm(
         <p class="muted">${translateText("agents.tribes_help")}</p>
         <label for="agent-nations">
           ${translateText("agents.nations")}
-          <output for="agent-nations">${settings.nationCount}</output>
+          <output
+            for="agent-nations"
+            .value=${String(settings.nationCount)}
+          ></output>
         </label>
         <input
           id="agent-nations"

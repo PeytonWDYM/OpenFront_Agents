@@ -13,6 +13,7 @@ import { z } from "zod";
 export const MODEL = "gpt-6-luna";
 export const EFFORT = "low";
 export const VERSION = "0.158.0";
+export const CONTEXT_WINDOW = 150_000;
 
 const cachedModel = z
   .object({
@@ -99,6 +100,9 @@ export async function runtimeConfiguration() {
   const options: Record<string, string> = {
     model: JSON.stringify(MODEL),
     model_reasoning_effort: JSON.stringify(EFFORT),
+    model_context_window: String(CONTEXT_WINDOW),
+    model_auto_compact_token_limit: String(CONTEXT_WINDOW),
+    model_auto_compact_token_limit_scope: '"total"',
     model_catalog_json: JSON.stringify(modelCatalog),
     approval_policy: '"never"',
     sandbox_mode: '"read-only"',

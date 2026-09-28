@@ -14,7 +14,8 @@ export function projectDecisionObservation(
     sections === undefined || sections.includes(section);
   const { canSendEmojiAllPlayers, canEmbargoAll, units, ...self } =
     observation.self;
-  const { cells, region, buildCosts, ...map } = observation.map;
+  const { cells, region, buildCosts, buildSites, publicStructures, ...map } =
+    observation.map;
   const relevantIds = new Set([
     ...observation.self.allies,
     ...observation.self.incomingAllianceRequests,
@@ -55,6 +56,9 @@ export function projectDecisionObservation(
         }
       : {}),
     ...(include("units") ? { units } : {}),
+    ...(include("units") && publicStructures !== undefined
+      ? { publicStructures }
+      : {}),
     ...(include("rivals")
       ? {
           rivals: rivals.map((rival) => ({
@@ -82,7 +86,15 @@ export function projectDecisionObservation(
         }
       : {}),
     ...(include("map")
-      ? { map: { ...map, ...(cells.length ? { region, cells } : {}) } }
+      ? {
+          map: {
+            ...map,
+            buildSites: buildSites.map(({ upgradeId, ...site }) =>
+              upgradeId === false ? site : { ...site, upgradeId },
+            ),
+            ...(cells.length ? { region, cells } : {}),
+          },
+        }
       : {}),
     ...(include("costs") && sections !== undefined ? { buildCosts } : {}),
     ...(include("events") ? { events: observation.events } : {}),
