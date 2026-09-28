@@ -29,7 +29,7 @@ try {
           },
         ],
       },
-      async () => null,
+      async () => ({ data: null }),
       () => {},
     ),
     /root object/,
@@ -52,7 +52,7 @@ try {
           },
         ],
       },
-      async () => null,
+      async () => ({ data: null }),
       () => {},
     ),
     /5,000-byte/,
@@ -77,7 +77,7 @@ try {
     async (name) => {
       assert.equal(name, "game_probe");
       toolCalls++;
-      return { connected: true };
+      return { data: { connected: true } };
     },
     (event) => events.push(event),
   );

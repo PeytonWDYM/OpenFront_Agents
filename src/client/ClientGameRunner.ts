@@ -71,6 +71,7 @@ import {
 } from "./Transport";
 import { createCanvas } from "./Utils";
 import { WebGLFrameBuilder } from "./WebGLFrameBuilder";
+import { AgentFocusEvent } from "./agents/AgentFocusEvent";
 import { MapLayerController } from "./controllers/MapLayerController";
 import { createRenderer, GameRenderer } from "./hud/GameRenderer";
 import { goldRateTracker } from "./hud/layers/lib/GoldRateTracker";
@@ -909,6 +910,12 @@ async function createClientGame(
 }
 
 export class ClientGameRunner {
+  private readonly focusAgent = (event: AgentFocusEvent): void => {
+    if (this.gameView.gameID() !== event.gameId) return;
+    const player = this.gameView.playerByClientID(event.clientId);
+    if (player !== null) this.eventBus.emit(new GoToPlayerEvent(player, 3));
+  };
+
   private myPlayer: PlayerView | null = null;
   private isActive = false;
 
@@ -971,6 +978,7 @@ export class ClientGameRunner {
     }, 20000);
 
     this.eventBus.on(MouseUpEvent, this.inputEvent.bind(this));
+    this.eventBus.on(AgentFocusEvent, this.focusAgent);
     this.eventBus.on(MouseMoveEvent, this.onMouseMove.bind(this));
     this.eventBus.on(AutoUpgradeEvent, this.autoUpgradeEvent.bind(this));
     this.eventBus.on(
@@ -1175,6 +1183,7 @@ export class ClientGameRunner {
   }
 
   public stop() {
+    this.eventBus.off(AgentFocusEvent, this.focusAgent);
     this.soundManager.dispose();
     this.graphicsListenerAbort?.abort();
     // Detach the input handler's window/canvas listeners and its EventBus

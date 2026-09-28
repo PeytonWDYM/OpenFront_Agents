@@ -1,28 +1,51 @@
+const FALLBACK_MS = 10_000;
+const EVENT_COOLDOWN_MS = 5_000;
+
 interface ScheduledPlayer {
   id: string;
   nextAt: number;
+  completedAt: number;
+  wakeRequested: boolean;
 }
 
-/** Fair queue with one active decision per player and an interval after completion. */
+/** Independent player turns with coalesced events and a periodic fallback. */
 export class TurnQueue {
   private pending: ScheduledPlayer[] = [];
+  private readonly players = new Map<string, ScheduledPlayer>();
   private readonly active = new Map<string, Promise<void>>();
   private timer: ReturnType<typeof setInterval> | null = null;
   private running = false;
 
   constructor(
     private readonly concurrency: number,
-    private readonly interval: number,
     private readonly eligible: (id: string) => boolean,
-    private readonly reserve: (id: string) => boolean,
     private readonly decide: (id: string) => Promise<number | void>,
-    private readonly release: (id: string) => void,
   ) {}
 
   start(ids?: string[]) {
-    if (ids) this.pending = ids.map((id) => ({ id, nextAt: 0 }));
+    if (ids) {
+      this.players.clear();
+      this.pending = ids.map((id) => {
+        const player = { id, nextAt: 0, completedAt: 0, wakeRequested: false };
+        this.players.set(id, player);
+        return player;
+      });
+    }
     this.running = true;
     this.timer ??= setInterval(() => this.pump(), 100);
+    this.pump();
+  }
+
+  wake(id: string) {
+    const player = this.players.get(id);
+    if (!player || !this.running) return;
+    player.wakeRequested = true;
+    if (!this.active.has(id)) {
+      player.nextAt = Math.min(
+        player.nextAt,
+        Math.max(Date.now(), player.completedAt + EVENT_COOLDOWN_MS),
+      );
+    }
     this.pump();
   }
 
@@ -42,6 +65,12 @@ export class TurnQueue {
 
   private pump() {
     if (!this.running) return;
+    // Earlier deadlines get a slot before newer urgent turns can repeat.
+    this.pending.sort(
+      (a, b) =>
+        a.nextAt - b.nextAt ||
+        Number(b.wakeRequested) - Number(a.wakeRequested),
+    );
     let scanned = this.pending.length;
     while (
       this.running &&
@@ -54,12 +83,9 @@ export class TurnQueue {
         this.pending.push(player);
         continue;
       }
-      if (!this.reserve(player.id)) {
-        this.pending.unshift(player);
-        return;
-      }
-      // Start in a microtask so the active map always contains the decision first.
-      let interval = this.interval;
+      player.wakeRequested = false;
+      // Register the active turn before its first tool or game event.
+      let interval = FALLBACK_MS;
       const work = Promise.resolve()
         .then(() => this.decide(player.id))
         .then((retryAfter) => {
@@ -67,8 +93,13 @@ export class TurnQueue {
         })
         .finally(() => {
           this.active.delete(player.id);
-          this.release(player.id);
-          this.pending.push({ id: player.id, nextAt: Date.now() + interval });
+          player.completedAt = Date.now();
+          player.nextAt =
+            player.completedAt +
+            (player.wakeRequested
+              ? Math.min(interval, EVENT_COOLDOWN_MS)
+              : interval);
+          this.pending.push(player);
         });
       this.active.set(player.id, work);
     }

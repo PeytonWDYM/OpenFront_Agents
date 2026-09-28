@@ -13,6 +13,7 @@ import { z } from "zod";
 export const MODEL = "gpt-6-luna";
 export const EFFORT = "low";
 export const VERSION = "0.158.0";
+export const CONTEXT_WINDOW = 150_000;
 
 const cachedModel = z
   .object({
@@ -21,6 +22,7 @@ const cachedModel = z
       z.object({ effort: z.string(), description: z.string() }),
     ),
     context_window: z.number().positive(),
+    input_modalities: z.array(z.string()),
   })
   .passthrough();
 
@@ -69,6 +71,11 @@ export async function runtimeConfiguration() {
       "The Codex model catalog must contain gpt-6-luna with low reasoning. Open Codex to refresh it.",
     );
   }
+  if (!model.input_modalities.includes("image")) {
+    throw new Error(
+      "gpt-6-luna does not support map images. Text-only fallback is disabled.",
+    );
+  }
   const modelCatalog = join(directory, "models.json");
   await writeFile(
     modelCatalog,
@@ -93,6 +100,9 @@ export async function runtimeConfiguration() {
   const options: Record<string, string> = {
     model: JSON.stringify(MODEL),
     model_reasoning_effort: JSON.stringify(EFFORT),
+    model_context_window: String(CONTEXT_WINDOW),
+    model_auto_compact_token_limit: String(CONTEXT_WINDOW),
+    model_auto_compact_token_limit_scope: '"total"',
     model_catalog_json: JSON.stringify(modelCatalog),
     approval_policy: '"never"',
     sandbox_mode: '"read-only"',

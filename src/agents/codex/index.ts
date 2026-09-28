@@ -1,7 +1,13 @@
 import { appendFile, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
-import { EFFORT, MODEL, runtimeConfiguration, VERSION } from "./config";
+import {
+  CONTEXT_WINDOW,
+  EFFORT,
+  MODEL,
+  runtimeConfiguration,
+  VERSION,
+} from "./config";
 import {
   record,
   thread,
@@ -10,6 +16,12 @@ import {
   toolCall,
   turnState,
 } from "./protocol";
+import {
+  GameImage,
+  gameToolResponse,
+  GameToolResult,
+  serializeInspectorEvent,
+} from "./toolResult";
 import { validateToolSchemas } from "./toolSchema";
 import { CodexTransport } from "./transport";
 import { UsageAccounting } from "./usage";
@@ -24,10 +36,11 @@ export type PlayerDefinition = {
   prompt: string;
   tools: GameTool[];
 };
+export type { GameImage, GameToolResult } from "./toolResult";
 type Player = {
   id: string;
   tools: Set<string>;
-  onTool: (name: string, args: unknown) => Promise<unknown>;
+  onTool: (name: string, args: unknown) => Promise<GameToolResult>;
   onEvent: (event: Record<string, unknown>) => void;
   log: Promise<void>;
   usage: UsageAccounting;
@@ -149,6 +162,13 @@ export class CodexRuntime {
       this.transport.request("mcpServerStatus/list", {}),
     ]);
     const config = z.object({ config: record }).parse(configuration).config;
+    const context = z
+      .object({
+        model_context_window: z.literal(CONTEXT_WINDOW),
+        model_auto_compact_token_limit: z.literal(CONTEXT_WINDOW),
+        model_auto_compact_token_limit_scope: z.literal("total"),
+      })
+      .parse(config);
     const skillCatalog = z.object({
       data: z.array(
         z.object({
@@ -209,6 +229,10 @@ export class CodexRuntime {
           ),
           model: MODEL,
           effort: EFFORT,
+          contextWindow: context.model_context_window,
+          autoCompactTokenLimit: context.model_auto_compact_token_limit,
+          autoCompactTokenLimitScope:
+            context.model_auto_compact_token_limit_scope,
           sandbox: config.sandbox_mode,
           approvalPolicy: config.approval_policy,
           webSearch: config.web_search,
@@ -246,7 +270,12 @@ export class CodexRuntime {
         selectedCapabilityRoots: [],
         approvalPolicy: "never",
         sandbox: "read-only",
-        config: { model_reasoning_effort: EFFORT },
+        config: {
+          model_reasoning_effort: EFFORT,
+          model_context_window: CONTEXT_WINDOW,
+          model_auto_compact_token_limit: CONTEXT_WINDOW,
+          model_auto_compact_token_limit_scope: "total",
+        },
         baseInstructions: definition.prompt,
         developerInstructions: "",
         ephemeral: false,
@@ -287,6 +316,9 @@ export class CodexRuntime {
           threadId: result.thread.id,
           model: MODEL,
           effort: EFFORT,
+          contextWindow: CONTEXT_WINDOW,
+          autoCompactTokenLimit: CONTEXT_WINDOW,
+          autoCompactTokenLimitScope: "total",
           prompt: definition.prompt,
           tools: definition.tools,
         },
@@ -298,6 +330,9 @@ export class CodexRuntime {
       type: "configuration",
       model: result.model,
       effort: result.reasoningEffort,
+      contextWindow: CONTEXT_WINDOW,
+      autoCompactTokenLimit: CONTEXT_WINDOW,
+      autoCompactTokenLimitScope: "total",
       instructionSources: result.instructionSources,
       sandbox: result.sandbox.type,
       tools: definition.tools.map((tool) => tool.name),
@@ -305,13 +340,24 @@ export class CodexRuntime {
     return result.thread.id;
   }
 
-  turn(threadId: string, text: string): Promise<void> {
+  turn(
+    threadId: string,
+    text: string,
+    images: readonly GameImage[] = [],
+  ): Promise<void> {
     return this.start(threadId, "turn/start", {
       threadId,
       model: MODEL,
       effort: EFFORT,
       environments: [],
-      input: [{ type: "text", text, text_elements: [] }],
+      input: [
+        { type: "text", text, text_elements: [] },
+        ...images.map(({ path }) => ({
+          type: "localImage",
+          path,
+          detail: "low",
+        })),
+      ],
     });
   }
 
@@ -397,13 +443,14 @@ export class CodexRuntime {
 
   private emit(threadId: string, event: Record<string, unknown>) {
     const player = this.player(threadId);
+    const serialized = serializeInspectorEvent(event);
     player.log = player.log.then(() =>
       appendFile(
         join(this.artifactDirectory, `${threadId}.jsonl`),
-        `${JSON.stringify(event)}\n`,
+        `${serialized}\n`,
       ),
     );
-    player.onEvent(event);
+    player.onEvent(record.parse(JSON.parse(serialized)));
   }
 
   private async onMessage(
@@ -421,24 +468,24 @@ export class CodexRuntime {
       }
       const call = toolCall.parse(params);
       const player = this.player(call.threadId);
-      let result: unknown;
-      let success = true;
+      let response: Awaited<ReturnType<typeof gameToolResponse>>;
       try {
         if (!player.tools.has(call.tool))
           throw new Error(`Unknown game tool: ${call.tool}`);
-        result = await player.onTool(call.tool, call.arguments);
+        response = await gameToolResponse(
+          await player.onTool(call.tool, call.arguments),
+        );
       } catch (error) {
-        success = false;
-        result = {
-          error: error instanceof Error ? error.message : String(error),
-        };
+        response = await gameToolResponse(
+          {
+            data: {
+              error: error instanceof Error ? error.message : String(error),
+            },
+          },
+          false,
+        );
       }
-      this.transport.respond(id, {
-        success,
-        contentItems: [
-          { type: "inputText", text: JSON.stringify(result) ?? "null" },
-        ],
-      });
+      this.transport.respond(id, response);
       return;
     }
     const threadId =
