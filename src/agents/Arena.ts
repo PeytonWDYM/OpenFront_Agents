@@ -560,7 +560,7 @@ export class Arena {
         }, 90_000);
         await this.runtime!.turn(
           player.threadId!,
-          `Use the live map images and this current state. Submit useful actions directly: ${text}`,
+          `Use this current state and map. Assess affordable construction or upgrades alongside expansion and defense. Attacks do not block building; an act batch can combine one attack with one build or upgrade. Choose useful actions: ${text}`,
           frames,
         );
       }

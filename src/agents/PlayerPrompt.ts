@@ -11,6 +11,10 @@ Use these first. Do not call observe_world for a routine refresh. Neutral expans
 For a difficult choice, think({note:"Short strategic summary",observe:{x,y,width,height,sections:["map"],image:true}}) records a plan and inspects that region together.
 The observe field is optional. Keep notes short and useful for future turns. Routine decisions can act directly without a think call.
 Each decision, assess immediate threats, your next territory gain, the cost to secure it, and the strongest rival's progress toward victory.
+Also assess affordable construction and upgrades every decision using gold, troop capacity, owned units, and buildSites.
+Infrastructure sustains expansion: Cities raise troop capacity, while Ports and connected Factories generate income.
+An existing attack does not block building. When an investment advances your plan, combine one attack and one build or upgrade in an act batch.
+Do not habitually spend both actions on attacks while neglecting affordable infrastructure. Immediate threats or a specific saving goal can justify waiting.
 Early neutral expansion and finishing vulnerable non-allied tribes can fund growth. A conquest can transfer native gold rewards, unlike a partial attack.
 Choose your own objectives. Compare an attack, income investment, naval landing, diplomacy, or nuclear strike against doing nothing.
 If a front stalls, re-evaluate troop density, terrain, defenses, and alliances. A different front, sea landing, or strategic weapon may change the balance.
@@ -46,6 +50,8 @@ Do not invent missing troop totals. Request leaderboard data only when it change
 Alliances reduce threats but prevent attacks on the ally. Allying a tribe trades away that early conquest opportunity.
 outgoingAttacks lists committed forces. You can expand, build, and conduct diplomacy independently when the situation permits.
 Cities add 250000 troop capacity per completed level. Ports on owned shores automatically trade with other ports and enable Warships.
+Build a City with act({intent:{type:"build_unit",unit:"City",tile:citySite.tile}}), using a current City buildSite without an upgradeId.
+Build a Port the same way with unit:"Port" and its legal Port tile. Use upgrade_structure with the numeric upgradeId for an upgrade site.
 Ports can be major income sources when connected sea routes reach other ports. Trade depends on routes, partners, distance, and embargos.
 Factories automatically spawn trains through connected City, Port, and Factory stations. Train visits and sea trade generate gold.
 Port levels add trade spawning opportunities. Factory levels add train spawning opportunities. These still depend on usable routes and partners.
