@@ -48,8 +48,19 @@ npm run prepare
 Installation deliberately skips lifecycle scripts, so hook activation is a separate step.
 The existing pre-commit hook runs lint-staged.
 
-The initial setup machine has Node.js 25.2.1 and npm 11.14.1.
-Project dependencies and commit hooks were not installed with these incompatible versions.
+This machine has an isolated Node.js 24.15.0 and npm 12.1.0 toolchain under
+`%LOCALAPPDATA%\OpenFront\toolchain`. Dependencies and Husky hooks are installed.
+The system Node.js and npm versions remain unchanged.
+
+In PowerShell, select the project toolchain before running npm commands:
+
+```powershell
+$runtime = Join-Path $env:LOCALAPPDATA 'OpenFront\toolchain'
+$env:PATH = "$runtime\npm-12\node_modules\.bin;$runtime\node-v24.15.0-win-x64;$env:PATH"
+npm.cmd run dev:agents
+```
+
+See [AgentArena.md](AgentArena.md) for local AI lobbies, controls, and test commands.
 
 ## Agent support
 

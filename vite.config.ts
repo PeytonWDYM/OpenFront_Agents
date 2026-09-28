@@ -453,6 +453,23 @@ export default defineConfig(({ mode }) => {
           rewrite: (path) => path.replace(/^\/w1/, ""),
         },
         // API proxies
+        "/api/agents": {
+          target: "http://127.0.0.1:9010",
+          changeOrigin: true,
+          bypass(req, res) {
+            const peer = req.socket.remoteAddress;
+            if (
+              peer === "127.0.0.1" ||
+              peer === "::1" ||
+              peer === "::ffff:127.0.0.1"
+            )
+              return;
+            if (!res) return false;
+            res.statusCode = 403;
+            res.end("The agent arena only accepts loopback connections.");
+            return req.url;
+          },
+        },
         "/api": {
           target: "http://localhost:3000",
           changeOrigin: true,

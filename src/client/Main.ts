@@ -937,6 +937,22 @@ class Client {
       this.joinModal.eventBus = this.eventBus;
     }
 
+    if (
+      ClientEnv.env() === GameEnv.Dev &&
+      ["localhost", "127.0.0.1", "[::1]"].includes(window.location.hostname)
+    ) {
+      const { mountAgentPanel } = await import("./agents/mountAgentPanel");
+      mountAgentPanel(this.eventBus, (gameId, spectator) => {
+        if (this.joinModal.isOpen()) this.joinModal.close();
+        history.replaceState(
+          null,
+          "",
+          `${ClientEnv.gamePath(gameId)}${spectator ? "?spectate=1" : ""}`,
+        );
+        void this.handleUrl();
+      });
+    }
+
     // Attempt to join lobby from the current URL once the document is ready.
     if (document.readyState === "loading") {
       document.addEventListener("DOMContentLoaded", () => this.handleUrl());
@@ -1618,7 +1634,7 @@ class Client {
           currentPagePath(
             lobbyIdHidden
               ? "/streamer-mode"
-              : `${ClientEnv.gamePath(lobby.gameID)}?live`,
+              : `${ClientEnv.gamePath(lobby.gameID)}?live${this.presenceSpectating ? "&spectate=1" : ""}`,
           ),
         );
       }
@@ -1739,9 +1755,9 @@ class Client {
       // page happens to be serving.
       targetUrl = lobbyIdHidden
         ? "/streamer-mode"
-        : ClientEnv.gamePath(lobbyId);
+        : `${ClientEnv.gamePath(lobbyId)}${this.presenceSpectating ? "?spectate=1" : ""}`;
     }
-    const currentUrl = window.location.pathname;
+    const currentUrl = window.location.pathname + window.location.search;
 
     if (currentUrl !== targetUrl) {
       history.replaceState(null, "", targetUrl);
