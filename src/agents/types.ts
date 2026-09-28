@@ -8,15 +8,19 @@ export type ArenaPhase =
 
 export interface ArenaSettings {
   agentCount: number;
+  tribeCount: number;
+  nationCount: number;
   mode: "codex" | "scripted";
-  decisionIntervalMs: number;
-  concurrency: number;
-  maxTokens: number;
-  maxDecisionsPerPlayer?: number;
+}
+
+export interface ArenaJoin {
+  clientId: string;
+  spectator: boolean;
 }
 
 export interface AgentPlayer {
   id: string;
+  clientId: string;
   name: string;
   threadId: string | null;
   status: string;
@@ -41,6 +45,7 @@ export interface PlayerEvent {
   time: number;
   type: string;
   text: string;
+  image?: string;
 }
 
 export interface PlayerInspector {

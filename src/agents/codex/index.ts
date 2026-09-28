@@ -24,6 +24,7 @@ export type PlayerDefinition = {
   prompt: string;
   tools: GameTool[];
 };
+export type GameImage = { path: string };
 type Player = {
   id: string;
   tools: Set<string>;
@@ -305,13 +306,24 @@ export class CodexRuntime {
     return result.thread.id;
   }
 
-  turn(threadId: string, text: string): Promise<void> {
+  turn(
+    threadId: string,
+    text: string,
+    images: readonly GameImage[] = [],
+  ): Promise<void> {
     return this.start(threadId, "turn/start", {
       threadId,
       model: MODEL,
       effort: EFFORT,
       environments: [],
-      input: [{ type: "text", text, text_elements: [] }],
+      input: [
+        { type: "text", text, text_elements: [] },
+        ...images.map(({ path }) => ({
+          type: "localImage",
+          path,
+          detail: "low",
+        })),
+      ],
     });
   }
 

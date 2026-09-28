@@ -19,7 +19,7 @@ The required version remains 0.158.0.
 | ------------------------------------------- | --------------------------------------------------------------------------- |
 | `initialize()`                              | Checks ChatGPT authentication, model availability, and runtime isolation.   |
 | `createPlayer(definition, onTool, onEvent)` | Creates one durable thread for a player.                                    |
-| `turn(threadId, text)`                      | Resolves after completion or interruption. Rejects failed turns.            |
+| `turn(threadId, text, images?)`             | Sends text and local map images. Rejects failed turns.                      |
 | `compact(threadId)`                         | Runs native Codex compaction and waits for completion.                      |
 | `interrupt(threadId)`                       | Interrupts the active turn.                                                 |
 | `history(threadId, includeTurns)`           | Reads native thread history.                                                |
@@ -28,6 +28,23 @@ The required version remains 0.158.0.
 Every player uses `gpt-6-luna` with `low` reasoning. The runtime disables provider model fallback.
 An unavailable model causes an error. The runtime does not substitute another model.
 A player retains the same thread across game decisions. Concurrent turns on that thread cause an error.
+
+The verified Luna catalog includes text and image inputs. The runtime rejects catalogs without image support.
+Each decision sends the live game map and a small resource, action, and event summary.
+Codex receives PNG files through native `localImage` inputs with `low` image detail.
+The runtime retains native thread history and compaction for image turns.
+
+The renderer saves one shared world overview per tick and a tactical crop for each spawned player.
+The overview stays within 768 pixels. The tactical crop stays within 512 pixels.
+Frames show live terrain, territory colors, public player labels, buildings, and world coordinate axes.
+Labels use `H` for human slots, `N` for nations, and `T` for tribes, followed by the native small ID.
+The renderer reads live terrain bytes so water conversions appear in subsequent frames.
+It does not read rival resources, troops, attack orders, or other private state.
+
+Each frame includes its world region and map pixel rectangle.
+Convert horizontal pixels with `worldX = region.x + (pixelX - mapPixels.x) * region.width / mapPixels.width`.
+Use the same formula with `y` and `height` for vertical pixels. The game observation supplies exact legal tile references.
+Frame files remain under `.agent-arena/frames/<gameId>` for inspection. Event logs contain file metadata and preview URLs.
 
 Full history requires at least one user message. Before that message, use `history(threadId, false)` for thread metadata.
 Native Codex stores persistent sessions in the isolated home. The adapter does not replace native history with a summary buffer.
@@ -91,7 +108,7 @@ After compaction, the runtime reads validated cumulative usage from the native r
 It stops publishing provisional RPC totals for that thread. This prevents a later RPC correction from counting compaction twice.
 Manual and automatic compaction use the same accounting path. Missing or invalid native usage records cause a runtime error.
 Codex 0.158.0 exposes no per-response output token limit through this protocol.
-A caller can interrupt at its token budget. Usage notifications can arrive after a response exceeds that budget.
+The arena does not impose a token budget. It retains native subscription limit and error handling.
 
 `artifactDirectory` contains `isolation.json`, a JSON definition for each thread, and per-thread JSONL events.
 The native session files remain under its `home` directory. The credential copy does not remain after `close()`.
@@ -111,7 +128,7 @@ Write and inspect these checks before runtime implementation:
 - A failed turn resolves successfully, or an interrupted turn remains pending.
 - The process exits while a request or turn remains pending.
 - Token usage or durable history cannot be read.
-- Compaction usage does not enter the cumulative budget.
+- Compaction usage does not enter cumulative usage.
 - Repeated compaction notifications count the same usage twice.
 - Later RPC token updates omit or duplicate a prior compaction.
 - Native usage records contain invalid numeric values or refer to another thread.

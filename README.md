@@ -96,9 +96,13 @@ Each player has a persistent Codex thread and uses native game actions and Quick
 npm run dev:agents
 ```
 
-Open `http://localhost:9000` and select **Agent lobby**. Create a lobby, then choose **Play** or **Spectate**.
-The panel shows player threads, actions, token usage, and compaction controls.
-See [the arena guide](docs/AgentArena.md) for budgets and tests, and [the fork setup](docs/ForkSetup.md) for this machine's PowerShell toolchain.
+Open `http://localhost:9000` and select **Agent lobby**. Set the agent count and the Nations and Tribes sliders.
+Choose **Play** or **Spectate**.
+The lobby starts after your client joins. Native nations join by default, and random spawns use the game's spacing checks.
+Agents receive live map images and a small state summary. Decisions repeat every ten seconds, with earlier turns for urgent events or agent requests.
+Select an agent to focus the map and inspect its thread. The panel shows actions, token usage, and compaction controls.
+The arena has no configured token cap.
+See [the arena guide](docs/AgentArena.md) for controls and tests, and [the fork setup](docs/ForkSetup.md) for this machine's PowerShell toolchain.
 
 ### Client Only
 

@@ -4,6 +4,7 @@ import {
   Game,
   Player,
   PlayerBuildable,
+  PlayerType,
 } from "../../core/game/Game";
 import { AgentEvent, AgentObservation, ObserveQuery } from "./schemas";
 
@@ -27,6 +28,7 @@ export class ObservationBuilder {
     index: number,
     query: ObserveQuery,
     events: AgentEvent[],
+    attackRatio = 0.2,
   ): AgentObservation {
     const game = this.game;
     const point = (tile: number) => ({
@@ -51,15 +53,58 @@ export class ObservationBuilder {
             )
           ] ??
           0);
+    const relevant = new Set([
+      ...player.incomingAttacks().map((attack) => attack.attacker().id()),
+      ...player.outgoingAttacks().map((attack) => attack.target().id()),
+      ...player
+        .incomingAllianceRequests()
+        .map((request) => request.requestor().id()),
+      ...player.allies().map((ally) => ally.id()),
+    ]);
+    for (const event of events.slice(-12)) {
+      const other =
+        event.data.otherPlayerId ??
+        event.data.requestor ??
+        event.data.attackerId ??
+        event.data.sender;
+      if (typeof other === "string") relevant.add(other);
+    }
+    if (
+      query.x !== undefined &&
+      query.y !== undefined &&
+      game.hasOwner(reference)
+    )
+      relevant.add(game.owner(reference).id());
+    const sharedBorders = new Set<number>();
+    for (const tile of player.borderTiles()) {
+      for (const neighbor of game.neighbors(tile))
+        sharedBorders.add(game.ownerID(neighbor));
+    }
+    const priority = (rival: Player) =>
+      relevant.has(rival.id())
+        ? 0
+        : sharedBorders.has(rival.smallID())
+          ? 1
+          : rival.type() === PlayerType.Human
+            ? 2
+            : rival.type() === PlayerType.Nation
+              ? 3
+              : 4;
     const rivals = game
       .allPlayers()
-      .filter((rival) => rival.id() !== player.id());
+      .filter((rival) => rival.id() !== player.id() && rival.isAlive());
     rivals.sort(
       (a, b) =>
+        priority(a) - priority(b) ||
         game.euclideanDistSquared(reference, a.spawnTile() ?? 0) -
-        game.euclideanDistSquared(reference, b.spawnTile() ?? 0),
+          game.euclideanDistSquared(reference, b.spawnTile() ?? 0),
     );
-    const visibleRivals = rivals.slice(0, 12);
+    const visibleRivals = rivals.filter(
+      (rival, index) =>
+        relevant.has(rival.id()) ||
+        sharedBorders.has(rival.smallID()) ||
+        index < 12,
+    );
     const sampleBorders: number[] = [];
     for (const tile of player.borderTiles()) {
       sampleBorders.push(tile);
@@ -128,7 +173,12 @@ export class ObservationBuilder {
     const height = Math.min(query.height ?? 64, game.height() - y);
     const stride = Math.max(1, Math.ceil(Math.max(width, height) / 8));
     const cells: AgentObservation["map"]["cells"] = [];
-    if (Object.keys(query).length > 0) {
+    if (
+      query.x !== undefined ||
+      query.y !== undefined ||
+      query.width !== undefined ||
+      query.height !== undefined
+    ) {
       for (let cy = y; cy < y + height; cy += stride) {
         for (let cx = x; cx < x + width; cx += stride) {
           const tile = game.ref(cx, cy);
@@ -176,9 +226,13 @@ export class ObservationBuilder {
       self: {
         id,
         playerId: player.id(),
+        playerType: player.type(),
+        smallId: player.smallID(),
+        ...(spawn === undefined ? {} : { position: point(spawn) }),
         alive: game.inSpawnPhase() || player.isAlive(),
         spawned: player.hasSpawned(),
         troops: Math.floor(player.troops()),
+        attackRatio,
         gold: Number(player.gold()),
         maxTroops: Math.floor(game.config().maxTroops(player)),
         tiles: player.numTilesOwned(),
@@ -221,15 +275,32 @@ export class ObservationBuilder {
       },
       rivals: visibleRivals.map((rival) => ({
         playerId: rival.id(),
+        playerType: rival.type(),
+        smallId: rival.smallID(),
+        ...(rival.spawnTile() === undefined
+          ? {}
+          : { position: point(rival.spawnTile()!) }),
         name: rival.name(),
         alive: rival.isAlive(),
         tiles: rival.numTilesOwned(),
         allied: player.isAlliedWith(rival),
-        sharesBorder: player.sharesBorderWith(rival),
+        sharesBorder: sharedBorders.has(rival.smallID()),
         canAttack: player.canAttackPlayer(rival),
         canRequestAlliance: player.canSendAllianceRequest(rival),
         canSendQuickChat: player.canSendQuickChat(rival),
         canSendEmoji: player.canSendEmoji(rival),
+        communication: {
+          quickChatResponse: rival.type() === PlayerType.Human,
+          emojiResponse:
+            rival.type() === PlayerType.Human ||
+            rival.type() === PlayerType.Nation,
+          allianceResponse:
+            rival.type() === PlayerType.Human
+              ? "player"
+              : rival.type() === PlayerType.Bot
+                ? "automatic"
+                : "conditional",
+        },
         embargoed: player.hasEmbargoAgainst(rival),
         allianceExpiresAt: player.allianceInfo(rival)?.expiresAt,
         canExtendAlliance: player.allianceInfo(rival)?.canExtend ?? false,

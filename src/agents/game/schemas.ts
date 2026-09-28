@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { PlayerType } from "../../core/game/Game";
 import {
   AllianceExtensionIntentSchema,
   AllianceRejectIntentSchema,
@@ -22,6 +23,7 @@ import {
   TargetPlayerIntentSchema,
   UpgradeStructureIntentSchema,
 } from "../../core/Schemas";
+import { flattenedEmojiTable } from "../../core/Util";
 
 // Native player intents only. Strict objects reject forged sender fields.
 export const AgentActionSchema = z.discriminatedUnion("type", [
@@ -47,9 +49,31 @@ export const AgentActionSchema = z.discriminatedUnion("type", [
   DeleteUnitIntentSchema.strict(),
 ]);
 export type AgentAction = z.infer<typeof AgentActionSchema>;
-const actionToolInputSchema = z
+export const AttackRatioSchema = z.number().min(0).max(1);
+export const NextDecisionSecondsSchema = z.number().int().min(1).max(10);
+export const AgentToolInputSchema = z
   .object({
-    intent: z.discriminatedUnion("type", [
+    intent: AgentActionSchema.optional(),
+    attackRatio: AttackRatioSchema.optional().describe(
+      "Fraction 0..1 of current troops. Persists. Overrides attack/boat troops.",
+    ),
+    nextDecisionSeconds: NextDecisionSecondsSchema.optional().describe(
+      "Next decision delay 1..10s. This turn only.",
+    ),
+  })
+  .strict()
+  .refine(
+    (input) =>
+      input.intent !== undefined || input.nextDecisionSeconds !== undefined,
+    "Supply intent or nextDecisionSeconds",
+  )
+  .refine(
+    (input) => input.attackRatio === undefined || input.intent !== undefined,
+    "attackRatio requires intent",
+  );
+const actionToolInputSchema = AgentToolInputSchema.safeExtend({
+  intent: z
+    .discriminatedUnion("type", [
       AgentActionSchema.options[0],
       ...AgentActionSchema.options.slice(1).map((option) =>
         option.shape.type.value === "quick_chat"
@@ -62,9 +86,9 @@ const actionToolInputSchema = z
             })
           : option,
       ),
-    ]),
-  })
-  .strict();
+    ])
+    .optional(),
+}).strict();
 
 // The Codex tool parser limits schemas to 5,000 bytes. Native validation retains
 // these constraints and the full Quick Chat enum when an intent is submitted.
@@ -88,6 +112,20 @@ function removeToolMetadata(value: unknown): void {
 }
 removeToolMetadata(agentActionToolSchema);
 export const quickChatKeys = QuickChatKeySchema.options;
+export const emojiChoices = flattenedEmojiTable.map((message, emoji) => ({
+  emoji,
+  message,
+}));
+
+export const observationSections = [
+  "self",
+  "rivals",
+  "map",
+  "events",
+  "units",
+  "costs",
+  "communication",
+] as const;
 
 export const ObserveQuerySchema = z
   .object({
@@ -95,21 +133,41 @@ export const ObserveQuerySchema = z
     y: z.number().int().min(0).optional(),
     width: z.number().int().min(1).max(32768).optional(),
     height: z.number().int().min(1).max(32768).optional(),
+    sections: z.array(z.enum(observationSections)).optional(),
   })
   .strict();
 export type ObserveQuery = z.infer<typeof ObserveQuerySchema>;
 
 export interface AgentEvent {
-  type: string;
+  type:
+    | "chat"
+    | "game"
+    | "alliance_request"
+    | "alliance_reply"
+    | "alliance_broken"
+    | "alliance_expired"
+    | "alliance_extended"
+    | "alliance_extension_request"
+    | "unit_incoming"
+    | "nuke_incoming"
+    | "incoming_attack"
+    | "attack_request"
+    | "emoji"
+    | "donation"
+    | "conquest"
+    | "spawn_end"
+    | "win";
   tick: number;
   at: number;
   data: Record<string, unknown>;
 }
-export interface AgentGameEvent extends AgentEvent {
+export interface AgentGameEvent extends Omit<AgentEvent, "type"> {
+  type: AgentEvent["type"] | "lobby_created" | "game_started" | "error";
   agentId?: string;
 }
 export interface AgentPlayer {
   id: string;
+  clientId: string;
   name: string;
   playerId?: string;
   alive: boolean;
@@ -121,9 +179,13 @@ export interface AgentObservation {
   self: {
     id: string;
     playerId: string;
+    playerType: PlayerType;
+    smallId: number;
+    position?: { tile: number; x: number; y: number };
     alive: boolean;
     spawned: boolean;
     troops: number;
+    attackRatio: number;
     gold: number;
     maxTroops: number;
     tiles: number;
@@ -144,6 +206,9 @@ export interface AgentObservation {
   };
   rivals: {
     playerId: string;
+    playerType: PlayerType;
+    smallId: number;
+    position?: { tile: number; x: number; y: number };
     name: string;
     alive: boolean;
     tiles: number;
@@ -153,6 +218,11 @@ export interface AgentObservation {
     canRequestAlliance: boolean;
     canSendQuickChat: boolean;
     canSendEmoji: boolean;
+    communication: {
+      quickChatResponse: boolean;
+      emojiResponse: boolean;
+      allianceResponse: "player" | "automatic" | "conditional";
+    };
     embargoed: boolean;
     allianceExpiresAt?: number;
     canExtendAlliance: boolean;

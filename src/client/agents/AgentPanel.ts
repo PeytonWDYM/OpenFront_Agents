@@ -8,18 +8,27 @@ import {
   AgentTranscript,
   agentRequest,
 } from "./AgentApi";
-import { agentLobbyForm, defaultAgentSettings } from "./AgentLobbyForm";
+import { agentControls } from "./AgentControls";
+import {
+  AgentRole,
+  agentLobbyForm,
+  defaultAgentSettings,
+} from "./AgentLobbyForm";
 import { agentPanelStyles } from "./AgentPanelStyles";
-import { agentTranscript } from "./AgentTranscript";
+import { agentPlayerList } from "./AgentPlayerList";
+import { agentTranscript, agentTranscriptControls } from "./AgentTranscript";
+import { agentTokenUsage } from "./AgentUsage";
 
-type Role = "play" | "spectate";
 const panelOpenKey = "openfront.agentPanelOpen";
+const pendingGameKey = "openfront.agentPendingGame";
+const pendingRoleKey = "openfront.agentPendingRole";
 
 @customElement("agent-panel")
 export class AgentPanel extends LitElement {
   static styles = agentPanelStyles;
 
   joinLobby: (gameId: string, spectator: boolean) => void;
+  focusPlayer: (gameId: string, clientId: string) => void;
   @state() private opened = sessionStorage.getItem(panelOpenKey) === "true";
   @state() private lobby: AgentLobby | null = null;
   @state() private showSetup = true;
@@ -29,8 +38,14 @@ export class AgentPanel extends LitElement {
   @state() private transcript: AgentTranscript | null = null;
   @state() private fullThread = false;
   @state() private joinedGameId: string | null = null;
-  @state() private joinedRole: Role | null = null;
+  @state() private joinedRole: AgentRole | null = null;
   @state() private joining = false;
+  private joinedClientId = "";
+  private pendingGameId = sessionStorage.getItem(pendingGameKey);
+  private pendingRole = sessionStorage.getItem(pendingRoleKey);
+  private starting = false;
+  private startFailed = false;
+  private mutationVersion = 0;
   private pollTimer: ReturnType<typeof setTimeout> | undefined;
   private refreshInFlight = false;
   private readonly stopGameInput = (event: Event) => event.stopPropagation();
@@ -41,7 +56,7 @@ export class AgentPanel extends LitElement {
     for (const event of ["pointermove", "wheel", "keydown", "keyup"]) {
       this.addEventListener(event, this.stopGameInput);
     }
-    if (this.opened) void this.refresh();
+    if (this.opened || this.pendingGameId !== null) void this.refresh();
   }
 
   disconnectedCallback(): void {
@@ -56,7 +71,9 @@ export class AgentPanel extends LitElement {
     if (!self) return;
     this.joinedGameId = event.lobby.gameID;
     this.joinedRole = self.spectator === true ? "spectate" : "play";
+    this.joinedClientId = event.myClientID;
     this.joining = false;
+    void this.startAfterJoin();
   }
 
   private toggle(): void {
@@ -70,8 +87,10 @@ export class AgentPanel extends LitElement {
     if (this.refreshInFlight) return;
     clearTimeout(this.pollTimer);
     this.refreshInFlight = true;
+    const mutationVersion = this.mutationVersion;
     try {
       const lobby = await agentRequest<AgentLobby>();
+      if (mutationVersion !== this.mutationVersion) return;
       if (this.lobby === null) this.showSetup = lobby.phase === "idle";
       if (this.lobby?.gameId !== lobby.gameId) {
         this.selectedId = null;
@@ -81,6 +100,9 @@ export class AgentPanel extends LitElement {
       this.lobby = lobby;
       this.error = "";
       if (!this.fullThread) await this.loadTranscript();
+      if (lobby.phase !== "lobby" && lobby.phase !== "idle")
+        this.clearPendingJoin();
+      else void this.startAfterJoin();
     } catch (error) {
       this.error =
         error instanceof Error
@@ -124,17 +146,15 @@ export class AgentPanel extends LitElement {
     path: string,
     body: AgentSettings | Record<string, never> = {},
   ): Promise<void> {
+    this.mutationVersion++;
+    if (path === "/stop") {
+      this.clearPendingJoin();
+      this.joining = false;
+    }
     this.busy = true;
     this.error = "";
     try {
       await agentRequest<unknown>(path, body);
-      if (path === "/create") {
-        this.showSetup = false;
-        this.selectedId = null;
-        this.transcript = null;
-        this.joinedGameId = null;
-        this.joinedRole = null;
-      }
       await this.refresh();
     } catch (error) {
       this.error =
@@ -146,12 +166,84 @@ export class AgentPanel extends LitElement {
     }
   }
 
-  private chooseRole(role: Role): void {
+  private async createAndJoin(
+    settings: AgentSettings,
+    role: AgentRole,
+  ): Promise<void> {
+    this.mutationVersion++;
+    this.busy = true;
+    this.error = "";
+    try {
+      this.lobby = await agentRequest<AgentLobby>("/create", settings);
+      this.showSetup = false;
+      this.selectedId = null;
+      this.transcript = null;
+      this.fullThread = false;
+      this.joinedGameId = null;
+      this.joinedRole = null;
+      this.chooseRole(role);
+    } catch (error) {
+      this.error =
+        error instanceof Error
+          ? error.message
+          : translateText("agents.unavailable");
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  private chooseRole(role: AgentRole): void {
+    this.pendingGameId = this.lobby!.gameId!;
+    this.pendingRole = role;
+    sessionStorage.setItem(pendingGameKey, this.pendingGameId);
+    sessionStorage.setItem(pendingRoleKey, role);
+    this.startFailed = false;
     this.joining = true;
     this.joinLobby(this.lobby!.gameId!, role === "spectate");
   }
 
-  private async inspect(id: string): Promise<void> {
+  private clearPendingJoin(): void {
+    this.pendingGameId = null;
+    this.pendingRole = null;
+    sessionStorage.removeItem(pendingGameKey);
+    sessionStorage.removeItem(pendingRoleKey);
+  }
+
+  // The native lobby event proves the server accepted this client's chosen role.
+  private async startAfterJoin(): Promise<void> {
+    if (
+      this.starting ||
+      this.startFailed ||
+      this.lobby?.phase !== "lobby" ||
+      this.pendingGameId !== this.lobby.gameId ||
+      this.joinedGameId !== this.pendingGameId ||
+      this.joinedRole !== this.pendingRole
+    )
+      return;
+    this.mutationVersion++;
+    this.starting = true;
+    this.busy = true;
+    try {
+      this.lobby = await agentRequest<AgentLobby>("/start", {
+        clientId: this.joinedClientId,
+        spectator: this.joinedRole === "spectate",
+      });
+      this.clearPendingJoin();
+    } catch (error) {
+      this.startFailed = true;
+      this.error =
+        error instanceof Error
+          ? error.message
+          : translateText("agents.unavailable");
+    } finally {
+      this.starting = false;
+      this.busy = false;
+    }
+  }
+
+  private async inspect(player: AgentLobby["players"][number]): Promise<void> {
+    const id = player.id;
+    this.focusPlayer(this.lobby!.gameId!, player.clientId);
     this.selectedId = id;
     this.transcript = null;
     this.fullThread = false;
@@ -165,171 +257,145 @@ export class AgentPanel extends LitElement {
     }
   }
 
-  private renderControls(lobby: AgentLobby) {
-    const joined = this.joinedGameId === lobby.gameId;
+  private renderHeader(lobby: AgentLobby | null) {
+    const inspecting = !this.showSetup && this.selectedId !== null;
+    const selectedPlayer = inspecting
+      ? lobby?.players.find((player) => player.id === this.selectedId)
+      : undefined;
+    const usage = lobby
+      ? inspecting
+        ? selectedPlayer
+          ? agentTokenUsage(
+              lobby.settings.mode,
+              selectedPlayer.tokens,
+              selectedPlayer.status === "thinking",
+            )
+          : translateText("agents.loading")
+        : agentTokenUsage(
+            lobby.settings.mode,
+            lobby.totalTokens,
+            lobby.players.some((player) => player.status === "thinking"),
+          )
+      : "";
     return html`
-      ${lobby.phase === "lobby"
-        ? html`
-            <p class="muted">
-              ${translateText(
-                joined
-                  ? this.joinedRole === "spectate"
-                    ? "agents.spectating"
-                    : "agents.playing"
-                  : "agents.choose_role",
-              )}
-            </p>
-            <div class="toolbar">
-              ${!joined
-                ? html`
-                    <button
-                      ?disabled=${this.busy || this.joining}
-                      @click=${() => this.chooseRole("play")}
+      <header class="panel-header">
+        <div class="header-main">
+          <div class="header-heading">
+            ${this.showSetup
+              ? nothing
+              : html`<span class="eyebrow"
+                  >${translateText("agents.title")}</span
+                >`}
+            <h2>
+              ${this.showSetup
+                ? translateText("agents.title")
+                : inspecting
+                  ? (selectedPlayer?.name ?? translateText("agents.loading"))
+                  : translateText("agents.all_agents")}
+            </h2>
+          </div>
+          <button
+            class="hide-control"
+            @click=${this.toggle}
+            aria-label=${translateText("agents.hide")}
+          >
+            ${translateText("agents.hide")}
+          </button>
+        </div>
+        ${!this.showSetup && lobby
+          ? html`
+              <div class="header-summary">
+                <span class="phase-badge"
+                  >${translateText(`agents.phase_${lobby.phase}`)}</span
+                >
+                <strong
+                  class="usage"
+                  aria-live="polite"
+                  aria-label=${translateText(
+                    inspecting ? "agents.player_usage" : "agents.total_usage",
+                  )}
+                  title=${lobby.settings.mode === "codex"
+                    ? translateText("agents.usage_help")
+                    : ""}
+                >
+                  ${usage}
+                </strong>
+              </div>
+              <div class="header-model">
+                ${translateText(
+                  lobby.settings.mode === "codex"
+                    ? "agents.model"
+                    : "agents.scripted_mode",
+                )}
+              </div>
+              <div class="header-actions">
+                ${inspecting
+                  ? html`<button
+                      class="back-control"
+                      @click=${() => {
+                        this.selectedId = null;
+                        this.transcript = null;
+                        this.fullThread = false;
+                      }}
                     >
-                      ${translateText("agents.play")}
-                    </button>
-                    <button
-                      ?disabled=${this.busy || this.joining}
-                      @click=${() => this.chooseRole("spectate")}
-                    >
-                      ${translateText("agents.spectate")}
-                    </button>
-                  `
+                      <span aria-hidden="true">‹</span> ${translateText(
+                        "agents.back",
+                      )}
+                    </button>`
+                  : nothing}
+                ${agentControls({
+                  lobby,
+                  busy: this.busy,
+                  joining: this.joining,
+                  joined: this.joinedGameId === lobby.gameId,
+                  startFailed: this.startFailed,
+                  chooseRole: (role) => this.chooseRole(role),
+                  action: (path) => void this.mutate(path),
+                  newLobby: () => {
+                    this.showSetup = true;
+                    this.selectedId = null;
+                  },
+                })}
+              </div>
+              ${inspecting
+                ? agentTranscriptControls({
+                    transcript: this.transcript,
+                    busy: this.busy,
+                    canCompact:
+                      lobby.phase === "lobby" || lobby.phase === "paused",
+                    fullThread: this.fullThread,
+                    loadFull: () => void this.loadFullThread(),
+                    compact: () =>
+                      void this.mutate(
+                        `/players/${encodeURIComponent(this.selectedId!)}/compact`,
+                      ),
+                  })
                 : nothing}
-              <button
-                class="primary"
-                ?disabled=${this.busy || !joined}
-                @click=${() => void this.mutate("/start")}
-              >
-                ${translateText("agents.start")}
-              </button>
-            </div>
-            ${this.joining
-              ? html`<p class="muted">${translateText("agents.joining")}</p>`
-              : nothing}
-          `
-        : nothing}
-      <div class="toolbar">
-        ${lobby.phase === "running"
-          ? html`<button
-              ?disabled=${this.busy}
-              @click=${() => void this.mutate("/pause")}
-            >
-              ${translateText("agents.pause")}
-            </button>`
+            `
           : nothing}
-        ${lobby.phase === "paused"
-          ? html`<button
-              ?disabled=${this.busy}
-              @click=${() => void this.mutate("/resume")}
-            >
-              ${translateText("agents.resume")}
-            </button>`
-          : nothing}
-        ${["lobby", "running", "paused", "error"].includes(lobby.phase)
-          ? html`<button
-              ?disabled=${this.busy}
-              @click=${() => void this.mutate("/stop")}
-            >
-              ${translateText("agents.stop")}
-            </button>`
-          : nothing}
-        ${["stopped", "error"].includes(lobby.phase)
-          ? html`<button
-              ?disabled=${this.busy}
-              @click=${() => {
-                this.showSetup = true;
-                this.selectedId = null;
-              }}
-            >
-              ${translateText("agents.new_lobby")}
-            </button>`
-          : nothing}
-      </div>
-      ${lobby.phase === "paused"
-        ? html`<p class="muted">${translateText("agents.pause_help")}</p>`
-        : nothing}
+      </header>
     `;
   }
 
   private renderLobby(lobby: AgentLobby) {
     return html`
-      <div class="status">
-        <strong>${translateText(`agents.phase_${lobby.phase}`)}</strong
-        ><span
-          >${translateText("agents.tokens", {
-            count: lobby.totalTokens.toLocaleString(),
-          })}</span
-        >
-      </div>
-      <p class="muted">
-        ${translateText(
-          lobby.settings.mode === "codex"
-            ? "agents.model"
-            : "agents.scripted_mode",
-        )}
-      </p>
       ${lobby.error ? html`<p class="error">${lobby.error}</p>` : nothing}
-      ${this.renderControls(lobby)}
+      <details class="panel-info">
+        <summary>${translateText("agents.lobby_help")}</summary>
+        ${lobby.settings.mode === "codex"
+          ? html`<p class="muted">${translateText("agents.usage_help")}</p>`
+          : nothing}
+        <p class="muted">${translateText("agents.inspect_help")}</p>
+        ${lobby.phase === "paused"
+          ? html`<p class="muted">${translateText("agents.pause_help")}</p>`
+          : nothing}
+        ${lobby.phase === "lobby"
+          ? html`<p class="muted">${translateText("agents.choose_role")}</p>`
+          : nothing}
+      </details>
       ${this.selectedId !== null
-        ? agentTranscript({
-            transcript: this.transcript,
-            busy: this.busy,
-            canCompact: lobby.phase === "lobby" || lobby.phase === "paused",
-            fullThread: this.fullThread,
-            loadFull: () => void this.loadFullThread(),
-            compact: () =>
-              void this.mutate(
-                `/players/${encodeURIComponent(this.selectedId!)}/compact`,
-              ),
-            back: () => {
-              this.selectedId = null;
-              this.transcript = null;
-              this.fullThread = false;
-            },
-          })
-        : html`
-            <p class="muted">${translateText("agents.inspect_help")}</p>
-            <ul class="players">
-              ${lobby.players.map(
-                (player) => html`
-                  <li>
-                    <button
-                      class="player"
-                      @click=${() => void this.inspect(player.id)}
-                    >
-                      <span class="player-head"
-                        ><strong>${player.name}</strong
-                        ><span
-                          class="player-status ${player.alive ? "" : "dead"}"
-                          >${translateText(
-                            player.alive ? "agents.alive" : "agents.not_alive",
-                          )}</span
-                        ></span
-                      >
-                      <span class="muted"
-                        >${translateText(`agents.status_${player.status}`)} ·
-                        ${translateText("agents.decisions", {
-                          count: player.decisions,
-                        })}
-                        ·
-                        ${translateText("agents.tokens", {
-                          count: player.tokens.toLocaleString(),
-                        })}</span
-                      >
-                      <span class="muted"
-                        >${player.lastAction ??
-                        translateText("agents.no_decision")}</span
-                      >
-                      ${player.error
-                        ? html`<span class="error">${player.error}</span>`
-                        : nothing}
-                    </button>
-                  </li>
-                `,
-              )}
-            </ul>
-          `}
+        ? agentTranscript(this.transcript, this.fullThread)
+        : agentPlayerList(lobby, (player) => void this.inspect(player))}
     `;
   }
 
@@ -340,15 +406,7 @@ export class AgentPanel extends LitElement {
       </button>`;
     return html`
       <section class="panel" aria-label=${translateText("agents.title")}>
-        <header>
-          <h2>${translateText("agents.title")}</h2>
-          <button
-            @click=${this.toggle}
-            aria-label=${translateText("agents.hide")}
-          >
-            ${translateText("agents.hide")}
-          </button>
-        </header>
+        ${this.renderHeader(this.lobby)}
         <div class="body">
           ${this.error
             ? html`<p class="error" role="alert">${this.error}</p>`
@@ -358,7 +416,7 @@ export class AgentPanel extends LitElement {
             : nothing}
           ${this.showSetup
             ? html`
-                <p class="muted">
+                <p class="muted auth-status">
                   ${translateText(
                     this.lobby?.runtime.authenticated
                       ? "agents.authenticated"
@@ -368,7 +426,7 @@ export class AgentPanel extends LitElement {
                 ${agentLobbyForm(
                   this.lobby?.settings ?? defaultAgentSettings,
                   this.busy,
-                  (settings) => void this.mutate("/create", settings),
+                  (settings, role) => void this.createAndJoin(settings, role),
                 )}
               `
             : this.lobby

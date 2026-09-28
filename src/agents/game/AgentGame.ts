@@ -1,6 +1,11 @@
 import { z } from "zod";
 import { createGameRunner, GameRunner } from "../../core/GameRunner";
-import { GameStartInfo, ServerMessage, Turn } from "../../core/Schemas";
+import {
+  GameInfoSchema,
+  GameStartInfo,
+  ServerMessage,
+  Turn,
+} from "../../core/Schemas";
 import {
   GameMapSize,
   GameMapType,
@@ -13,8 +18,10 @@ import {
   GameUpdateType,
   GameUpdateViewData,
 } from "../../core/game/GameUpdates";
+import { MapImages } from "../vision";
 import { LocalMapLoader } from "./LocalMapLoader";
 import { PlayerSocket } from "./PlayerSocket";
+import { projectDecisionObservation } from "./decision";
 import { playerEvents } from "./events";
 import { ObservationBuilder } from "./observation";
 import {
@@ -22,6 +29,7 @@ import {
   AgentEvent,
   AgentGameEvent,
   AgentPlayer,
+  AttackRatioSchema,
   ObserveQuery,
   ObserveQuerySchema,
 } from "./schemas";
@@ -34,6 +42,8 @@ const LobbyResponseSchema = z.object({
 
 export interface AgentGameOptions {
   agentCount: number;
+  tribeCount?: number;
+  nationCount?: number;
   map?: GameMapType;
   randomSpawn?: boolean;
   onEvent?: (event: AgentGameEvent) => void;
@@ -45,6 +55,9 @@ export class AgentGame {
   private runner?: GameRunner;
   private observations?: ObservationBuilder;
   private histories = new Map<string, AgentEvent[]>();
+  private incomingAttacks = new Map<string, Set<string>>();
+  private attackRatios = new Map<string, number>();
+  private mapImages?: MapImages;
   private gameId_ = "";
   private workerId = 0;
   private gameStart_?: GameStartInfo;
@@ -55,6 +68,16 @@ export class AgentGame {
 
   constructor(private options: AgentGameOptions) {
     z.number().int().min(1).max(400).parse(options.agentCount);
+    z.number()
+      .int()
+      .min(0)
+      .max(400)
+      .parse(options.tribeCount ?? 100);
+    z.number()
+      .int()
+      .min(0)
+      .max(400)
+      .parse(options.nationCount ?? 52);
   }
 
   get gameId(): string {
@@ -84,26 +107,30 @@ export class AgentGame {
 
   async create(): Promise<{ gameId: string; workerId: number }> {
     if (this.gameId_) throw new Error("The agent lobby already exists");
+    const nationCount = this.options.nationCount ?? 52;
     const lobby = LobbyResponseSchema.parse(
       await this.admin("/api/adminbot/create_game", {
         gameMap: this.options.map ?? GameMapType.Europe,
         gameMapSize: GameMapSize.Compact,
         gameType: GameType.Private,
         gameMode: GameMode.FFA,
-        bots: 0,
-        nations: "disabled",
+        bots: this.options.tribeCount ?? 100,
+        nations: nationCount === 0 ? "disabled" : nationCount,
         randomSpawn: this.options.randomSpawn ?? true,
         donateGold: true,
         donateTroops: true,
       }),
     );
     this.gameId_ = lobby.gameID;
+    this.mapImages = new MapImages(this.gameId_);
     this.workerId = lobby.workerIndex;
     for (let index = 0; index < this.options.agentCount; index++) {
       const id = `agent${String(index + 1).padStart(3, "0")}`;
       const seat = new PlayerSocket(id, `Agent ${index + 1}`, this.workerId);
       this.seats.push(seat);
       this.histories.set(id, []);
+      this.incomingAttacks.set(id, new Set());
+      this.attackRatios.set(id, 0.2);
     }
     await Promise.all(
       this.seats.map((seat, index) =>
@@ -127,6 +154,28 @@ export class AgentGame {
       data: { gameId: this.gameId_, workerId: this.workerId },
     });
     return { gameId: this.gameId_, workerId: this.workerId };
+  }
+
+  async validateJoin(join: {
+    clientId: string;
+    spectator: boolean;
+  }): Promise<void> {
+    if (!this.gameId_)
+      throw new Error("Create the lobby before starting the game");
+    const response = await fetch(
+      `http://localhost:${3001 + this.workerId}/api/game/${this.gameId_}`,
+      { signal: AbortSignal.timeout(15_000) },
+    );
+    if (!response.ok)
+      throw new Error(`Native lobby lookup failed (${response.status})`);
+    const lobby = GameInfoSchema.parse(await response.json());
+    const client = lobby.clients?.find(
+      (client) => client.clientID === join.clientId,
+    );
+    if (!client || (client.spectator ?? false) !== join.spectator)
+      throw new Error(
+        "The player has not joined the native lobby with the selected role",
+      );
   }
 
   async start(): Promise<void> {
@@ -195,7 +244,12 @@ export class AgentGame {
     for (const seat of this.seats) {
       const player = game.playerByClientID(seat.clientId);
       if (!player) continue;
-      const events = playerEvents(game, player, update.updates);
+      const events = playerEvents(
+        game,
+        player,
+        update.updates,
+        this.incomingAttacks.get(seat.id)!,
+      );
       const history = this.histories.get(seat.id)!;
       history.push(...events);
       this.histories.set(
@@ -259,16 +313,42 @@ export class AgentGame {
       this.seats.indexOf(this.seat(agentId)),
       ObserveQuerySchema.parse(query),
       this.histories.get(agentId)!,
+      this.attackRatios.get(agentId)!,
     );
     observation.gameId = this.gameId_;
     return observation;
   }
 
-  async act(agentId: string, args: unknown) {
-    this.player(agentId);
-    const intent = AgentActionSchema.parse(args);
+  decisionObservation(agentId: string) {
+    return projectDecisionObservation(this.observe(agentId));
+  }
+
+  async vision(agentId: string) {
+    const player = this.player(agentId);
+    return this.mapImages!.render(this.runner!.game, player);
+  }
+
+  async act(agentId: string, args: unknown, attackRatio?: number) {
+    const player = this.player(agentId);
+    const ratio =
+      attackRatio === undefined
+        ? this.attackRatios.get(agentId)!
+        : AttackRatioSchema.parse(attackRatio);
+    let intent = AgentActionSchema.parse(args);
+    if (
+      (intent.type === "attack" &&
+        (intent.troops === null || attackRatio !== undefined)) ||
+      (intent.type === "boat" && attackRatio !== undefined)
+    )
+      intent = { ...intent, troops: player.troops() * ratio };
     this.seat(agentId).send({ type: "intent", intent });
-    return { accepted: true as const, tick: this.runner!.game.ticks(), intent };
+    this.attackRatios.set(agentId, ratio);
+    return {
+      accepted: true as const,
+      tick: this.runner!.game.ticks(),
+      intent,
+      attackRatio: ratio,
+    };
   }
 
   players(): AgentPlayer[] {
@@ -276,6 +356,7 @@ export class AgentGame {
       const player = this.runner?.game.playerByClientID(seat.clientId);
       return {
         id: seat.id,
+        clientId: seat.clientId,
         name: seat.name,
         playerId: player?.id(),
         alive: player

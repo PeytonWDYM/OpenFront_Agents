@@ -1,9 +1,14 @@
 import express from "express";
-import { ZodError } from "zod";
+import { resolve } from "node:path";
+import { z, ZodError } from "zod";
 import { Arena } from "./Arena";
 
 const arena = new Arena();
 const app = express();
+const StartRequestSchema = z.union([
+  z.object({}).strict(),
+  z.object({ clientId: z.string(), spectator: z.boolean() }).strict(),
+]);
 let mutations: Promise<unknown> = Promise.resolve();
 
 function localHost(value: string) {
@@ -34,6 +39,10 @@ app.use((req, res, next) => {
   next();
 });
 app.use(express.json({ limit: "16kb" }));
+app.use(
+  "/api/agents/frames",
+  express.static(resolve(".agent-arena/frames"), { index: false }),
+);
 
 app.get("/api/agents", (_req, res) => res.json(arena.snapshot()));
 app.get("/api/agents/players/:id", (req, res) =>
@@ -59,7 +68,17 @@ function mutation(
 }
 
 mutation("/api/agents/create", (req) => arena.create(req.body));
-mutation("/api/agents/start", () => arena.start());
+mutation("/api/agents/start", (req) => {
+  const join = StartRequestSchema.parse(req.body);
+  return arena.start(
+    "clientId" in join
+      ? {
+          clientId: join.clientId,
+          spectator: join.spectator,
+        }
+      : undefined,
+  );
+});
 mutation("/api/agents/pause", () => arena.pause());
 mutation("/api/agents/resume", () => arena.resume());
 mutation("/api/agents/stop", () => arena.stop());

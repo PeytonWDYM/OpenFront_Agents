@@ -1,4 +1,7 @@
-import type { ArenaSettings as AgentSettings } from "../../agents/types";
+import type {
+  ArenaSettings as AgentSettings,
+  ArenaJoin,
+} from "../../agents/types";
 import { translateText } from "../Utils";
 export type {
   ArenaSnapshot as AgentLobby,
@@ -8,7 +11,7 @@ export type {
 
 export async function agentRequest<T>(
   path = "",
-  body?: AgentSettings | Record<string, never>,
+  body?: AgentSettings | ArenaJoin | Record<string, never>,
 ): Promise<T> {
   const response = await fetch(`/api/agents${path}`, {
     method: body === undefined ? "GET" : "POST",

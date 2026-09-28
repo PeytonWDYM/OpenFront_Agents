@@ -21,6 +21,7 @@ const cachedModel = z
       z.object({ effort: z.string(), description: z.string() }),
     ),
     context_window: z.number().positive(),
+    input_modalities: z.array(z.string()),
   })
   .passthrough();
 
@@ -67,6 +68,11 @@ export async function runtimeConfiguration() {
   ) {
     throw new Error(
       "The Codex model catalog must contain gpt-6-luna with low reasoning. Open Codex to refresh it.",
+    );
+  }
+  if (!model.input_modalities.includes("image")) {
+    throw new Error(
+      "gpt-6-luna does not support map images. Text-only fallback is disabled.",
     );
   }
   const modelCatalog = join(directory, "models.json");

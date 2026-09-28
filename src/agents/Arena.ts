@@ -1,10 +1,15 @@
 import { z, ZodError } from "zod";
 import { CodexRuntime } from "./codex/index";
 import { EventLog } from "./EventLog";
-import { AgentGame } from "./game/index";
 import {
-  AgentActionSchema,
+  AgentGame,
+  isUrgentAgentEvent,
+  projectDecisionObservation,
+} from "./game/index";
+import type { AgentGameEvent } from "./game/schemas";
+import {
   agentActionToolSchema,
+  AgentToolInputSchema,
   ObserveQuerySchema,
   quickChatKeys,
 } from "./game/schemas";
@@ -12,9 +17,8 @@ import { playerPrompt } from "./PlayerPrompt";
 import { scriptedAction } from "./ScriptedPlayer";
 import { ArenaSettingsSchema, defaultSettings } from "./Settings";
 import { TurnQueue } from "./TurnQueue";
-import type { AgentPlayer, ArenaSnapshot } from "./types";
+import type { AgentPlayer, ArenaJoin, ArenaSnapshot } from "./types";
 
-const TURN_RESERVATION = 4_096;
 const ObserveWorldQuerySchema = ObserveQuerySchema.extend({
   quickChatKeys: z.boolean().optional(),
 });
@@ -34,7 +38,8 @@ export class Arena {
   private runtime: CodexRuntime | null = null;
   private queue: TurnQueue | null = null;
   private logs = new EventLog();
-  private readonly reservations = new Set<string>();
+  private readonly suppliedTicks = new Map<string, number>();
+  private readonly requestedDelays = new Map<string, number>();
   private readonly calls = new Map<string, number>();
   private readonly invalidActions = new Map<string, number>();
   private readonly actions = new Map<string, number>();
@@ -62,6 +67,7 @@ export class Arena {
     await this.stop();
     this.logs = new EventLog();
     this.halted.clear();
+    this.suppliedTicks.clear();
     this.state = {
       phase: "idle",
       gameId: null,
@@ -83,12 +89,15 @@ export class Arena {
       }
       this.game = new AgentGame({
         agentCount: settings.agentCount,
+        tribeCount: settings.tribeCount,
+        nationCount: settings.nationCount,
         onEvent: (event) => this.gameEvent(event),
       });
       const lobby = await this.game.create();
       this.state.gameId = lobby.gameId;
       this.state.players = this.game.players().map((player) => ({
         id: player.id,
+        clientId: player.clientId,
         name: player.name,
         alive: true,
         threadId: null,
@@ -121,7 +130,7 @@ export class Arena {
                 {
                   name: "act",
                   description:
-                    "Submit one native gameplay intent as your own player. Execution may reject stale or illegal actions.",
+                    "Submit a native gameplay intent, request the next decision delay, or both. Stale or illegal actions may fail.",
                   inputSchema: agentActionToolSchema,
                 },
               ],
@@ -133,17 +142,12 @@ export class Arena {
         }
       }
       this.queue = new TurnQueue(
-        settings.concurrency,
-        settings.decisionIntervalMs,
+        Math.ceil(settings.agentCount / 4),
         (id) =>
           this.state.phase === "running" &&
           this.player(id).alive &&
-          !this.player(id).error &&
-          (settings.maxDecisionsPerPlayer === undefined ||
-            this.player(id).decisions < settings.maxDecisionsPerPlayer),
-        (id) => this.reserve(id),
+          !this.player(id).error,
         (id) => this.decide(id),
-        (id) => this.reservations.delete(id),
       );
       this.state.phase = "lobby";
     } catch (error) {
@@ -156,9 +160,10 @@ export class Arena {
     return this.snapshot();
   }
 
-  async start() {
+  async start(join?: ArenaJoin) {
     if (this.state.phase !== "lobby")
       throw new Error("Create a lobby before starting.");
+    if (join) await this.game!.validateJoin(join);
     try {
       await this.game!.start();
       this.state.phase = "running";
@@ -183,13 +188,6 @@ export class Arena {
   resume() {
     if (this.state.phase !== "paused")
       throw new Error("Pause the arena before resuming.");
-    if (
-      this.state.settings.mode === "codex" &&
-      this.state.totalTokens + TURN_RESERVATION > this.state.settings.maxTokens
-    )
-      throw new Error(
-        "The token budget is exhausted. Create another arena with a larger budget.",
-      );
     this.state.phase = "running";
     delete this.state.error;
     for (const player of this.state.players) {
@@ -220,13 +218,6 @@ export class Arena {
     if (!this.runtime || !player.threadId)
       throw new Error("Scripted players do not have Codex threads.");
     await this.queue?.drain();
-    if (
-      this.state.totalTokens + TURN_RESERVATION >
-      this.state.settings.maxTokens
-    ) {
-      throw new Error("The token budget cannot reserve native compaction.");
-    }
-    this.reservations.add(id);
     player.status = "compacting";
     let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
@@ -261,7 +252,6 @@ export class Arena {
       throw error;
     } finally {
       clearTimeout(timeout);
-      this.reservations.delete(id);
       player.status = player.error ? "error" : "ready";
     }
     return this.inspect(id);
@@ -286,23 +276,6 @@ export class Arena {
           void this.runtime.interrupt(player.threadId).catch(() => {});
       }
     }
-  }
-
-  private reserve(id: string) {
-    this.syncPlayers();
-    if (!this.player(id).alive) return false;
-    if (
-      this.state.settings.mode === "codex" &&
-      this.state.totalTokens + (this.reservations.size + 1) * TURN_RESERVATION >
-        this.state.settings.maxTokens
-    ) {
-      this.state.error = "The token budget cannot reserve another decision.";
-      this.halt("paused");
-      void this.interruptActive();
-      return false;
-    }
-    this.reservations.add(id);
-    return true;
   }
 
   private async tool(id: string, name: string, args: unknown) {
@@ -330,17 +303,37 @@ export class Arena {
         "observe",
         `World observation at tick ${observation.tick}.`,
       );
-      return includeQuickChatKeys
-        ? { ...observation, quickChatKeys }
-        : observation;
+      const sections =
+        region.sections ??
+        (region.x !== undefined ||
+        region.y !== undefined ||
+        region.width !== undefined ||
+        region.height !== undefined
+          ? ["map" as const]
+          : undefined);
+      if (!sections || sections.includes("events")) {
+        observation.events = observation.events.filter(
+          (event) => event.tick > (this.suppliedTicks.get(id) ?? -1),
+        );
+        this.suppliedTicks.set(id, observation.tick);
+      }
+      const projected = projectDecisionObservation(observation, sections);
+      return includeQuickChatKeys ? { ...projected, quickChatKeys } : projected;
     }
     if (name !== "act") throw new Error("Unknown game tool.");
     let result: Awaited<ReturnType<AgentGame["act"]>>;
     try {
-      const { intent } = z
-        .object({ intent: AgentActionSchema })
-        .strict()
-        .parse(args);
+      const { intent, attackRatio, nextDecisionSeconds } =
+        AgentToolInputSchema.parse(args);
+      if (nextDecisionSeconds !== undefined) {
+        this.requestedDelays.set(id, nextDecisionSeconds * 1_000);
+        this.logs.add(
+          id,
+          "schedule",
+          `Requested the next decision in ${nextDecisionSeconds} seconds.`,
+        );
+      }
+      if (intent === undefined) return { accepted: true, nextDecisionSeconds };
       const actions = this.actions.get(id) ?? 0;
       if (actions >= 2) {
         this.halted.add(id);
@@ -350,7 +343,7 @@ export class Arena {
         throw new Error("The two-action limit ended this decision.");
       }
       this.actions.set(id, actions + 1);
-      result = await this.game!.act(id, intent);
+      result = await this.game!.act(id, intent, attackRatio);
     } catch (error) {
       if (!(error instanceof ZodError)) throw error;
       const failures = (this.invalidActions.get(id) ?? 0) + 1;
@@ -368,7 +361,7 @@ export class Arena {
       }
       throw Object.assign(
         new Error(
-          "Invalid act arguments. Supply {intent: {type: 'attack', targetID: null, troops: 5000}} or another intent from the action schema.",
+          "Invalid act arguments. Supply a native intent, nextDecisionSeconds from 1 to 10, or both. attackRatio requires an intent.",
         ),
         { cause: error },
       );
@@ -381,7 +374,9 @@ export class Arena {
 
   private async decide(id: string) {
     if (this.state.phase !== "running") return;
+    this.syncPlayers();
     const player = this.player(id);
+    if (!player.alive) return;
     this.halted.delete(id);
     this.calls.set(id, 0);
     this.invalidActions.set(id, 0);
@@ -399,7 +394,38 @@ export class Arena {
         if (!action) return 500;
         await this.tool(id, "act", { intent: action });
       } else {
-        const text = JSON.stringify(observation);
+        const vision = await this.game!.vision(id);
+        if (this.state.phase !== "running" || this.halted.has(id)) return;
+        const frames = [
+          vision.overview,
+          ...(vision.tactical ? [vision.tactical] : []),
+        ];
+        for (const [index, frame] of frames.entries())
+          this.logs.add(
+            id,
+            "vision",
+            `${index === 0 ? "Overview" : "Tactical"} map at tick ${vision.tick}.`,
+            {
+              tick: vision.tick,
+              region: frame.region,
+              mapPixels: frame.mapPixels,
+            },
+            frame.url,
+          );
+        observation.events = observation.events.filter(
+          (event) => event.tick > (this.suppliedTicks.get(id) ?? -1),
+        );
+        this.suppliedTicks.set(id, observation.tick);
+        const text = JSON.stringify({
+          ...projectDecisionObservation(observation),
+          images: frames.map((frame) => ({
+            tick: vision.tick,
+            width: frame.width,
+            height: frame.height,
+            region: frame.region,
+            mapPixels: frame.mapPixels,
+          })),
+        });
         timeout = setTimeout(() => {
           this.halted.add(id);
           this.logs.add(
@@ -411,11 +437,13 @@ export class Arena {
         }, 90_000);
         await this.runtime!.turn(
           player.threadId!,
-          `Choose and submit useful actions. Current world: ${text}`,
+          `Use the live map images and this current state. Submit useful actions directly: ${text}`,
+          frames,
         );
       }
       player.decisions++;
       this.logs.add(id, "decision", `Decision ${player.decisions} completed.`);
+      return this.requestedDelays.get(id);
     } catch (error) {
       if (this.state.phase === "running") {
         player.error = message(error);
@@ -430,6 +458,7 @@ export class Arena {
       }
     } finally {
       clearTimeout(timeout);
+      this.requestedDelays.delete(id);
       if (player.alive) player.status = player.error ? "error" : "ready";
     }
   }
@@ -450,21 +479,9 @@ export class Arena {
     const delta = Math.max(0, event.totalTokens - player.tokens);
     player.tokens += delta;
     this.state.totalTokens += delta;
-    if (
-      this.state.totalTokens >= this.state.settings.maxTokens &&
-      this.state.phase === "running"
-    ) {
-      this.state.error = "The token budget is exhausted.";
-      this.halt("paused");
-      void this.interruptActive();
-    }
   }
 
-  private gameEvent(event: {
-    type: string;
-    agentId?: string;
-    data: Record<string, unknown>;
-  }) {
+  private gameEvent(event: AgentGameEvent) {
     if (event.agentId)
       this.logs.add(
         event.agentId,
@@ -482,6 +499,13 @@ export class Arena {
       void this.interruptActive();
     }
     this.syncPlayers();
+    if (event.agentId && this.state.phase === "running") {
+      const native = this.game!.players().find(
+        (player) => player.id === event.agentId,
+      )!;
+      if (isUrgentAgentEvent(event, native.playerId!))
+        this.queue!.wake(event.agentId);
+    }
   }
 
   private halt(phase: ArenaSnapshot["phase"]) {
@@ -509,6 +533,5 @@ export class Arena {
     this.game = null;
     this.runtime = null;
     this.queue = null;
-    this.reservations.clear();
   }
 }
