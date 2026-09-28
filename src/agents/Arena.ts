@@ -2,6 +2,7 @@ import { z, ZodError } from "zod";
 import { CodexRuntime, type GameToolResult } from "./codex/index";
 import { tokenUsage } from "./codex/protocol";
 import { EventLog } from "./EventLog";
+import { ActionDecision, ActionLimitError } from "./game/actionBatch";
 import {
   AgentGame,
   isUrgentAgentEvent,
@@ -11,7 +12,6 @@ import { NukePreviewRequestSchema } from "./game/nukePreview";
 import type { AgentGameEvent } from "./game/schemas";
 import {
   agentActionToolSchema,
-  AgentToolInputSchema,
   ObserveQuerySchema,
   quickChatKeys,
 } from "./game/schemas";
@@ -70,7 +70,7 @@ export class Arena {
   private readonly requestedDelays = new Map<string, number>();
   private readonly calls = new Map<string, number>();
   private readonly invalidActions = new Map<string, number>();
-  private readonly actions = new Map<string, number>();
+  private readonly actions = new Map<string, ActionDecision>();
   private readonly halted = new Set<string>();
 
   snapshot(): ArenaSnapshot {
@@ -152,13 +152,13 @@ export class Arena {
                 {
                   name: "observe_world",
                   description:
-                    "Read current own resources, public map and unit levels, native legality, costs, and communication choices. Select sections or a region. Request image or nukePreview for a focused map.",
+                    "Read current own resources, victory progress, public leaderboard, trade traffic, map and unit levels, native legality, costs, and communication choices. Select sections or a region. Request image or nukePreview for a focused map.",
                   inputSchema: z.toJSONSchema(ObserveWorldQuerySchema),
                 },
                 {
                   name: "act",
                   description:
-                    "Submit native attacks, transports, buildings, upgrades, warship movement, diplomacy, chat, or trade controls with native IDs. Set attackRatio or nextDecisionSeconds when needed. Submission does not guarantee execution.",
+                    "Submit one intent or 1..2 intents in order with native IDs. Each intent uses the two-action budget. Set attackRatio or nextDecisionSeconds when needed. Submissions are not atomic and do not guarantee execution.",
                   inputSchema: agentActionToolSchema,
                 },
               ],
@@ -417,31 +417,33 @@ export class Arena {
       };
     }
     if (name !== "act") throw new Error("Unknown game tool.");
-    let result: Awaited<ReturnType<AgentGame["act"]>>;
     try {
-      const { intent, attackRatio, nextDecisionSeconds } =
-        AgentToolInputSchema.parse(args);
-      if (nextDecisionSeconds !== undefined) {
-        this.requestedDelays.set(id, nextDecisionSeconds * 1_000);
-        this.logs.add(
-          id,
-          "schedule",
-          `Requested the next decision in ${nextDecisionSeconds} seconds.`,
-        );
-      }
-      if (intent === undefined)
-        return { data: { accepted: true, nextDecisionSeconds } };
-      const actions = this.actions.get(id) ?? 0;
-      if (actions >= 2) {
+      const result = await this.actions.get(id)!.submit(
+        args,
+        async (intent, attackRatio) => {
+          const result = await this.game!.act(id, intent, attackRatio);
+          const player = this.player(id);
+          player.lastAction = JSON.stringify(result.intent);
+          this.logs.add(id, "action", `Submitted ${player.lastAction}`, result);
+          return result;
+        },
+        (nextDecisionSeconds) => {
+          this.requestedDelays.set(id, nextDecisionSeconds * 1_000);
+          this.logs.add(
+            id,
+            "schedule",
+            `Requested the next decision in ${nextDecisionSeconds} seconds.`,
+          );
+        },
+      );
+      return { data: result };
+    } catch (error) {
+      if (error instanceof ActionLimitError) {
         this.halted.add(id);
         const player = this.player(id);
         if (player.threadId)
           void this.runtime!.interrupt(player.threadId).catch(() => {});
-        throw new Error("The two-action limit ended this decision.");
       }
-      this.actions.set(id, actions + 1);
-      result = await this.game!.act(id, intent, attackRatio);
-    } catch (error) {
       if (!(error instanceof ZodError)) throw error;
       const failures = (this.invalidActions.get(id) ?? 0) + 1;
       this.invalidActions.set(id, failures);
@@ -458,15 +460,11 @@ export class Arena {
       }
       throw Object.assign(
         new Error(
-          "Invalid act arguments. Supply a native intent, nextDecisionSeconds from 1 to 10, or both. attackRatio requires an intent.",
+          "Invalid act arguments. Supply intent or 1..2 intents, nextDecisionSeconds from 1 to 10, or both. attackRatio requires actions.",
         ),
         { cause: error },
       );
     }
-    const player = this.player(id);
-    player.lastAction = JSON.stringify(result.intent);
-    this.logs.add(id, "action", `Submitted ${player.lastAction}`, result);
-    return { data: result };
   }
 
   private async decide(id: string) {
@@ -477,7 +475,7 @@ export class Arena {
     this.halted.delete(id);
     this.calls.set(id, 0);
     this.invalidActions.set(id, 0);
-    this.actions.set(id, 0);
+    this.actions.set(id, new ActionDecision());
     player.status = "thinking";
     let timeout: ReturnType<typeof setTimeout> | undefined;
     try {

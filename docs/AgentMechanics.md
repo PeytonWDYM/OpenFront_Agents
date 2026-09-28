@@ -18,7 +18,8 @@ Current native player types are `HUMAN`, `BOT`, and `NATION`. This fork has no `
 ## Observation limits
 
 Full observations include exact resources for the current player, public rival names and territory, legal action hints, and recent private events.
-Rival troop totals and gold balances are omitted. Enemy attacks show their attacker and attack ID, without hidden troop totals.
+Rival entries omit troop totals and gold balances. Public leaderboard rows expose these values, as the native human scoreboard does.
+Enemy attacks show their attacker and attack ID, without their committed troop totals. Private messages and ship cargo stay hidden.
 Limits are 12 border targets, 4 boat targets, 8 build sites, 32 owned units, and 12 events.
 Rivals include all current border players, attackers, allies, requestors, and recent event participants, plus up to 12 ranked players.
 Current threats, allies, and shared borders rank first. Remaining players rank by distance without a player-type preference.
@@ -41,8 +42,15 @@ The compact snapshot lists available actions, useful build sites, owned units, c
 It omits empty map samples and the complete construction cost list. It includes six ranked rivals and each relevant border or event participant.
 The arena supplies private events since the previous decision. A decision should use its supplied snapshot before requesting more data.
 Neutral expansion needs no map query. A region query returns only map data unless the caller selects other sections.
-Supported sections are `self`, `rivals`, `map`, `events`, `units`, `costs`, and `communication`.
-Section queries preserve the same recipient filters. A query cannot reveal another player's resources or private messages.
+Supported sections are `self`, `rivals`, `map`, `events`, `units`, `costs`, `leaderboard`, and `communication`.
+Section queries preserve recipient filters. A query cannot reveal another player's private messages or attack commitments.
+
+The `victory` summary reports the native land threshold, non-fallout land denominator, owned share, and tiles still required.
+Normal matches require more than 80% of non-fallout land. FFA alliances do not combine ownership. Team games use team ownership.
+The summary also reports elapsed time, the optional lobby timer, the 170-minute native hard limit, and overtime settings.
+Routine decisions include the top five land owners and the current agent's rank and public resources.
+Request `sections: ["leaderboard"]` for all living players, public resource totals, income rates, unit levels, alliances, and betrayals.
+Income rates reuse the native client's two-minute rolling calculation. Rates begin at zero until the bridge has two samples.
 
 Each image provides its world `region` and the image's `mapPixels` rectangle. World coordinates increase rightward and downward.
 The grid labels and legend identify positions, ownership, and player types. Legal tile references still come from observations.
@@ -99,10 +107,21 @@ Transports require owned coastal access, without a Port. `boatTargets` includes 
 The bridge checks each hint with native `canBuild(TransportShip, tile)`. `cancel_attack` and `cancel_boat` use owned attack or ship IDs.
 
 Build actions use `build_unit`, a native unit type, and a tile. Check `buildSites` for the current legal site and cost.
+A Warship build site uses its water patrol target. The engine selects a completed Port on connected water for the launch.
+The bounded site list reserves a legal Warship hint when one exists. Affordability and native launch rules still apply.
+`map.tradeTraffic` lists up to twelve nearby public Trade Ships with their current positions, owners, and public destination Ports.
+Region queries filter traffic before this limit. Owner and destination affiliations distinguish self, team, ally, and other.
+Other means non-allied. It does not assert that native piracy rules permit capture.
+Image labels use `S<shipId>/<ownerSmallId><relation>`, where Y means self, T team, A ally, and O other.
+Dashed destination lines and hollow endpoint diamonds show a public destination direction. They do not show the ship's actual water path.
+The view omits private origins, cargo, and execution state. Captured trade pays piracy gold when it reaches the capturer's Port.
 A first City costs 125,000 gold and normally takes 20 ticks to complete.
 Later structure costs increase with native construction counts. Use the observed cost rather than a remembered price.
 Owned units expose their IDs and upgrade eligibility. `upgrade_structure`, `move_warship`, and `delete_unit` use those IDs.
 The engine enforces ownership, placement, affordability, and cooldowns for every action.
+Use `act({ "intents": [firstIntent, secondIntent] })` to submit one or two actions in one tool call.
+Choose `intent` or `intents`. The bridge validates the complete batch before it submits actions in order.
+Each action uses the existing two-action allowance for that decision. Batches return individual results and do not execute atomically.
 
 The spawn briefing explains each major structure and unit without a fixed build order:
 

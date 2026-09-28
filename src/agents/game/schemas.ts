@@ -24,6 +24,8 @@ import {
   UpgradeStructureIntentSchema,
 } from "../../core/Schemas";
 import { flattenedEmojiTable } from "../../core/Util";
+import type { AgentMatchStats } from "./matchStats";
+import type { NavalAffiliation } from "./naval";
 
 // Native player intents only. Strict objects reject forged sender fields.
 export const AgentActionSchema = z.discriminatedUnion("type", [
@@ -54,8 +56,9 @@ export const NextDecisionSecondsSchema = z.number().int().min(1).max(10);
 export const AgentToolInputSchema = z
   .object({
     intent: AgentActionSchema.optional(),
+    intents: z.array(AgentActionSchema).min(1).max(2).optional(),
     attackRatio: AttackRatioSchema.optional().describe(
-      "Fraction 0..1 of current troops. Persists. Overrides attack/boat troops.",
+      "Fraction 0..1 of current troops for each intent. Persists. Overrides attack/boat troops.",
     ),
     nextDecisionSeconds: NextDecisionSecondsSchema.optional().describe(
       "Next decision delay 1..10s. This turn only.",
@@ -64,40 +67,70 @@ export const AgentToolInputSchema = z
   .strict()
   .refine(
     (input) =>
-      input.intent !== undefined || input.nextDecisionSeconds !== undefined,
-    "Supply intent or nextDecisionSeconds",
+      input.intent !== undefined ||
+      input.intents !== undefined ||
+      input.nextDecisionSeconds !== undefined,
+    "Supply intent, intents, or nextDecisionSeconds",
   )
   .refine(
-    (input) => input.attackRatio === undefined || input.intent !== undefined,
-    "attackRatio requires intent",
+    (input) => input.intent === undefined || input.intents === undefined,
+    "Choose intent or intents, not both",
+  )
+  .refine(
+    (input) =>
+      input.attackRatio === undefined ||
+      input.intent !== undefined ||
+      input.intents !== undefined,
+    "attackRatio requires intent or intents",
   );
-const actionToolInputSchema = AgentToolInputSchema.safeExtend({
-  intent: z
-    .discriminatedUnion("type", [
-      AgentActionSchema.options[0],
-      ...AgentActionSchema.options.slice(1).map((option) =>
-        option.shape.type.value === "quick_chat"
-          ? option.extend({
-              quickChatKey: z
-                .string()
-                .describe(
-                  "Use a quickChatKeys value from observe_world({quickChatKeys:true})",
-                ),
-            })
-          : option,
-      ),
-    ])
-    .optional(),
-}).strict();
-
+const toolActionSchema = z.discriminatedUnion("type", [
+  AgentActionSchema.options[0],
+  ...AgentActionSchema.options.slice(1).map((option) =>
+    option.shape.type.value === "quick_chat"
+      ? option.extend({
+          quickChatKey: z
+            .string()
+            .describe(
+              "Use a quickChatKeys value from observe_world({quickChatKeys:true})",
+            ),
+        })
+      : option,
+  ),
+]);
 // The Codex tool parser limits schemas to 5,000 bytes. Native validation retains
 // these constraints and the full Quick Chat enum when an intent is submitted.
-export const agentActionToolSchema = z.toJSONSchema(actionToolInputSchema);
+export const agentActionToolSchema = {
+  type: "object",
+  properties: {
+    intent: { $ref: "#/$defs/action" },
+    intents: {
+      type: "array",
+      items: { $ref: "#/$defs/action" },
+      minItems: 1,
+      maxItems: 2,
+      description:
+        "Choose intent or intents. Submit actions in order, not atomically.",
+    },
+    attackRatio: {
+      type: "number",
+      description:
+        "Fraction 0..1 of current troops for each intent. Persists. Overrides attack/boat troops.",
+    },
+    nextDecisionSeconds: {
+      type: "integer",
+      description: "Next decision delay 1..10s. This turn only.",
+    },
+  },
+  additionalProperties: false,
+  $defs: { action: z.toJSONSchema(toolActionSchema) },
+};
 function removeToolMetadata(value: unknown): void {
   if (Array.isArray(value)) {
     value.forEach(removeToolMetadata);
   } else if (value !== null && typeof value === "object") {
     const object = value as Record<string, unknown>;
+    // A const already fixes its type. Omit the redundant type to save schema bytes.
+    if ("const" in object) delete object.type;
     for (const key of [
       "$schema",
       "pattern",
@@ -125,6 +158,7 @@ export const observationSections = [
   "units",
   "costs",
   "communication",
+  "leaderboard",
 ] as const;
 
 export const ObserveQuerySchema = z
@@ -174,7 +208,7 @@ export interface AgentPlayer {
   playerId?: string;
   alive: boolean;
 }
-export interface AgentObservation {
+export interface AgentObservation extends AgentMatchStats {
   gameId: string;
   tick: number;
   spawnPhase: boolean;
@@ -262,6 +296,25 @@ export interface AgentObservation {
       y: number;
       ownerId: string | null;
       launchTile: number;
+    }[];
+    tradeTraffic: {
+      id: number;
+      type: string;
+      tile: number;
+      x: number;
+      y: number;
+      ownerId: string;
+      ownerSmallId: number;
+      affiliation: NavalAffiliation;
+      destination?: {
+        id: number;
+        tile: number;
+        x: number;
+        y: number;
+        ownerId: string;
+        ownerSmallId: number;
+        affiliation: NavalAffiliation;
+      };
     }[];
     buildSites: {
       type: string;

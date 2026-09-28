@@ -58,6 +58,10 @@ The bridge reads the latest native tick when a decision starts. Tick updates alo
 It supplies only events newer than that agent's previous observation. Inspector logs stay local and are not appended to each prompt.
 Earlier decisions remain in the persistent Codex thread and can contribute cached input until native compaction.
 Agents can request focused data when they need exact tiles, costs, or communication choices.
+They also receive native victory progress and a short public leaderboard. A leaderboard query returns all living players and scoreboard columns.
+Public trade observations and map cues identify ship owners, destination Ports, and owner or destination affiliations.
+Warship hints use legal water patrol targets. Agents can submit one or two native actions in a single `act` call.
+Batch actions share the existing per-decision allowance and return individual submission results.
 They can request a regional image or inspect owned units and public enemy structures within that region.
 They can also focus an image on any human, nation, or tribe by its native player ID.
 Focused views show current public territory and keep the requesting agent's private information separate.

@@ -44,6 +44,44 @@ export function projectDecisionObservation(
     gameId: observation.gameId,
     tick: observation.tick,
     spawnPhase: observation.spawnPhase,
+    victory: observation.victory,
+    ...(include("leaderboard")
+      ? {
+          leaderboard: sections?.includes("leaderboard")
+            ? observation.leaderboard
+            : {
+                selfRank: observation.leaderboard.selfRank,
+                players: observation.leaderboard.players
+                  .filter(
+                    (row) =>
+                      row.rank <= 5 ||
+                      row.playerId === observation.self.playerId,
+                  )
+                  .map(
+                    ({
+                      rank,
+                      playerId,
+                      name,
+                      playerType,
+                      landPercent,
+                      gold,
+                      troops,
+                    }) => ({
+                      rank,
+                      playerId,
+                      name,
+                      playerType,
+                      landPercent,
+                      gold,
+                      troops,
+                    }),
+                  ),
+                ...(observation.leaderboard.teams.length
+                  ? { teams: observation.leaderboard.teams }
+                  : {}),
+              },
+        }
+      : {}),
     ...(include("self")
       ? {
           self: {

@@ -9,14 +9,18 @@ import {
   Structures,
   UnitType,
 } from "../../core/game/Game";
+import { MatchStats } from "./matchStats";
+import { publicTradeTraffic, warshipBuildSite } from "./naval";
 import { AgentEvent, AgentObservation, ObserveQuery } from "./schemas";
 
 /** Static samples are shared by all seats. Ownership checks use the live mirror. */
 export class ObservationBuilder {
   private candidates: number[] = [];
   private coastalCandidates: number[] = [];
+  private readonly stats: MatchStats;
 
   constructor(private game: Game) {
+    this.stats = new MatchStats(game);
     for (let y = 8; y < game.height(); y += 24) {
       for (let x = 8; x < game.width(); x += 24) {
         const tile = game.ref(x, y);
@@ -137,6 +141,8 @@ export class ObservationBuilder {
       if (buildSamples.length >= 12) break;
     }
     const buildSites: AgentObservation["map"]["buildSites"] = [];
+    const warship = warshipBuildSite(game, player, reference);
+    if (warship) buildSites.push(warship);
     for (const tile of buildSamples) {
       for (const buildable of player.buildableUnits(tile)) {
         if (buildable.canBuild === false && buildable.canUpgrade === false)
@@ -152,7 +158,9 @@ export class ObservationBuilder {
         buildSites.push({
           type: buildable.type,
           tile:
-            Nukes.has(buildable.type) || buildable.canBuild === false
+            Nukes.has(buildable.type) ||
+            buildable.type === UnitType.Warship ||
+            buildable.canBuild === false
               ? tile
               : buildable.canBuild,
           cost: Number(buildable.cost),
@@ -252,6 +260,7 @@ export class ObservationBuilder {
       }
     }
     return {
+      ...this.stats.observe(player),
       gameId: "",
       tick: game.ticks(),
       spawnPhase: game.inSpawnPhase(),
@@ -349,6 +358,14 @@ export class ObservationBuilder {
         spawnCandidates,
         borders,
         boatTargets,
+        tradeTraffic: publicTradeTraffic(
+          game,
+          player,
+          reference,
+          query.x !== undefined && query.y !== undefined
+            ? withinRegion
+            : undefined,
+        ),
         ...(regionalUnits
           ? {
               publicStructures: game

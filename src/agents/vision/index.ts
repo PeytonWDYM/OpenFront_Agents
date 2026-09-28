@@ -2,7 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { Game, Player, PlayerType, UnitType } from "../../core/game/Game";
 import { NukePreview, samCoverage, trajectoryPoint } from "../game/nukePreview";
-import { drawUnitMarkers } from "./markers";
+import { drawUnitMarkers, TradeTrafficMarker } from "./markers";
 import { encodePng } from "./png";
 import { Color, Raster, Region } from "./raster";
 export type { Region } from "./raster";
@@ -14,13 +14,19 @@ export type MapImage = {
   height: number;
   region: Region;
   mapPixels: Region;
+  tradeTraffic?: TradeTrafficMarker[];
 };
 export type MapVision = {
   tick: number;
   overview: MapImage;
   tactical?: MapImage;
 };
-type Frame = { raster: Raster; region: Region; mapPixels: Region };
+type Frame = {
+  raster: Raster;
+  region: Region;
+  mapPixels: Region;
+  tradeTraffic?: TradeTrafficMarker[];
+};
 
 const terrainColors: Color[] = Array.from({ length: 256 }, (_, terrain) => {
   const magnitude = terrain & 31;
@@ -91,7 +97,7 @@ function draw(
   self?: Player,
   preview?: NukePreview,
 ): Frame {
-  const footer = preview ? 88 : self ? 77 : 66;
+  const footer = preview ? 110 : self ? 99 : 66;
   const scale = Math.min(
     (limit - 44) / region.width,
     (limit - footer) / region.height,
@@ -316,12 +322,29 @@ function draw(
     );
     occupied.push(box);
   }
-  drawUnitMarkers(game, raster, region, mapPixels, occupied, self);
+  const tradeTraffic = drawUnitMarkers(
+    game,
+    raster,
+    region,
+    mapPixels,
+    occupied,
+    self,
+  );
   if (self) {
     raster.text(
-      "YOU YELLOW ALLY CYAN W WARSHIP B BOAT S TRADE",
+      "YOU YELLOW ALLY CYAN W WARSHIP B BOAT",
       36,
       raster.height - (preview ? 45 : 34),
+    );
+    raster.text(
+      "S ID/OWNER Y SELF T TEAM A ALLY O OTHER",
+      36,
+      raster.height - (preview ? 67 : 56),
+    );
+    raster.text(
+      "DASH TO PORT ONLY - NOT WATER PATH",
+      36,
+      raster.height - (preview ? 56 : 45),
     );
   }
   if (preview) {
@@ -381,13 +404,17 @@ function draw(
       raster.height - 34,
     );
   }
-  raster.text("H HUMAN  N NATION  T TRIBE", 36, raster.height - 23);
+  raster.text(
+    self ? "H HUMAN  N NATION  T TRIBE" : "H HUMAN N NATION T TRIBE S TRADE",
+    36,
+    raster.height - 23,
+  );
   raster.text(
     "C CITY P PORT F FACTORY D DEF A SAM M SILO",
     36,
     raster.height - 12,
   );
-  return { raster, region, mapPixels };
+  return { raster, region, mapPixels, ...(self ? { tradeTraffic } : {}) };
 }
 
 /** One overview per tick serves every seat. Crops include only public map data. */
@@ -486,7 +513,7 @@ export class MapImages {
   }
 
   private async save(frame: Frame, name: string): Promise<MapImage> {
-    const { raster, region, mapPixels } = frame;
+    const { raster, region, mapPixels, tradeTraffic } = frame;
     const png = await encodePng(raster.width, raster.height, raster.rgb);
     await this.ready;
     const path = resolve(this.directory, name);
@@ -498,6 +525,7 @@ export class MapImages {
       height: raster.height,
       region,
       mapPixels,
+      ...(tradeTraffic ? { tradeTraffic } : {}),
     };
   }
 }
