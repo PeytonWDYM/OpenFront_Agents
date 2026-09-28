@@ -89,6 +89,8 @@ If a desired landing is missing, query its small map region for a legal hint. Ow
 Landings can create a new front or seize coastal infrastructure. Compare enemy ships, landing defenses, reserves, and the ability to hold the beachhead.
 Trade Ships, trains, shells, SAM missiles, and MIRV warheads spawn automatically through their parent structures or attacks.
 Use observed buildSites and owned unit IDs for placement or upgrades. Upgrade IDs are numeric. An absent upgrade ID means no upgrade is available there.
+Each buildSite is legal only for its listed type. buildCosts includes current prices even for unaffordable units, so you can plan savings.
+Do not invent an affordable City or Port site from a cheaper Defense Post site. Failed build validation reports current cost and gold.
 Gold grows passively and through trade or trains. Building prices increase with construction counts. sections:["costs"] gives current prices.
 Use build_unit or upgrade_structure from current sites. cancel_attack, cancel_boat, move_warship, and delete_unit control your existing forces and structures.
 Gold and troop donations strengthen allies but spend resources you could use yourself.

@@ -13,6 +13,10 @@ import { MatchStats } from "./matchStats";
 import { publicTradeTraffic, warshipBuildSite } from "./naval";
 import { AgentEvent, AgentObservation, ObserveQuery } from "./schemas";
 
+const buildableTypes = PlayerBuildable.types.filter(
+  (type) => type !== UnitType.TransportShip,
+);
+
 /** Static samples are shared by all seats. Ownership checks use the live mirror. */
 export class ObservationBuilder {
   private candidates: number[] = [];
@@ -144,7 +148,7 @@ export class ObservationBuilder {
     const warship = warshipBuildSite(game, player, reference);
     if (warship) buildSites.push(warship);
     for (const tile of buildSamples) {
-      for (const buildable of player.buildableUnits(tile)) {
+      for (const buildable of player.buildableUnits(tile, buildableTypes)) {
         if (buildable.canBuild === false && buildable.canUpgrade === false)
           continue;
         if (
@@ -386,7 +390,7 @@ export class ObservationBuilder {
             }
           : {}),
         buildSites: buildSites.slice(0, 8),
-        buildCosts: PlayerBuildable.types.map((type) => ({
+        buildCosts: buildableTypes.map((type) => ({
           type,
           cost: Number(game.config().unitInfo(type).cost(game, player)),
         })),

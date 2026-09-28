@@ -134,7 +134,7 @@ export function projectDecisionObservation(
           },
         }
       : {}),
-    ...(include("costs") && sections !== undefined ? { buildCosts } : {}),
+    ...(include("costs") ? { buildCosts } : {}),
     ...(include("events") ? { events: observation.events } : {}),
     ...(sections?.includes("communication")
       ? { quickChatKeys, emojiChoices }

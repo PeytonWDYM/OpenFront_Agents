@@ -13,6 +13,8 @@ import {
   GameMode,
   GameType,
   Player,
+  PlayerBuildable,
+  UnitType,
 } from "../../core/game/Game";
 import {
   ErrorUpdate,
@@ -402,6 +404,23 @@ export class AgentGame {
         ? this.attackRatios.get(agentId)!
         : AttackRatioSchema.parse(attackRatio);
     let intent = AgentActionSchema.parse(args);
+    if (intent.type === "build_unit") {
+      if (
+        !PlayerBuildable.has(intent.unit) ||
+        intent.unit === UnitType.TransportShip
+      )
+        throw new Error(
+          "This unit spawns through its parent structure. Use the boat intent for troop transports.",
+        );
+      const game = this.runner!.game;
+      if (
+        !game.isValidRef(intent.tile) ||
+        player.canBuild(intent.unit, intent.tile) === false
+      )
+        throw new Error(
+          `Cannot build ${intent.unit} at tile ${intent.tile}. Required gold: ${game.unitInfo(intent.unit).cost(game, player)}; available: ${player.gold()}. Use a current matching buildSite or inspect the target region.`,
+        );
+    }
     if (
       (intent.type === "attack" &&
         (intent.troops === null || attackRatio !== undefined)) ||
