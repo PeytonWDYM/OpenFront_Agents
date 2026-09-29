@@ -145,7 +145,10 @@ export class OpenCodeRuntime {
       const active: ActiveTurn = { resolve, reject };
       this.active.set(threadId, active);
       void this.decide(threadId, player, text, images, active).then(
-        resolve,
+        () => {
+          this.active.delete(threadId);
+          resolve();
+        },
         (error: unknown) => {
           this.active.delete(threadId);
           reject(error instanceof Error ? error : new Error(String(error)));
@@ -264,6 +267,9 @@ export class OpenCodeRuntime {
       const child = spawn(this.command, [...this.launchArgs, ...args], {
         cwd: this.artifactDirectory,
         windowsHide: true,
+        // A piped stdin makes the CLI wait for input; turns pass everything
+        // as arguments, so close it up front.
+        stdio: ["ignore", "pipe", "pipe"],
       });
       active.child = child;
       let stdout = "";
