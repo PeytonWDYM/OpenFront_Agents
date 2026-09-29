@@ -11,8 +11,10 @@ already configured there can play. The default is Muse Spark 1.3 Free
 (`opencode/muse-spark-1.3-contributor-free`) at low reasoning
 (`--variant low`). Set `OPENFRONT_OPENCODE_MODEL` to `provider/model`
 to pin another model and `OPENFRONT_OPENCODE_VARIANT` for another effort.
-Set `OPENFRONT_OPENCODE_EXECUTABLE` to an explicit binary path
-(a `.mjs` fake works for offline tests).
+The runtime spawns one persistent `opencode serve` child per match on
+127.0.0.1 with a generated password, so turns are single HTTP round-trips
+instead of cold CLI boots. Set `OPENFRONT_OPENCODE_EXECUTABLE` to an
+explicit binary path (a fake serve works for offline tests).
 
 Each decision sends the player's own instructions plus the live snapshot and
 asks for a single JSON action object (`note`, `intent`/`intents`,
@@ -20,10 +22,13 @@ asks for a single JSON action object (`note`, `intent`/`intents`,
 added; the only extra lines are the machine-readable reply envelope the
 parser needs. The runtime executes the returned think/act calls through
 the arena bridge, so the one-structure-build limit and the two-action
-budget apply to OpenCode players too. Map images from the current decision
-are attached with `--file`. Sessions continue with `--session` when the
-CLI reports one; every decision already carries the full snapshot, so a
-lost session degrades to stateless play.
+budget apply to OpenCode players too. Bridge rejections come back as
+per-turn tool-error events instead of failing the turn. Map images from
+the current decision ride along as file attachments. Sessions rotate
+every twelve turns because every decision already carries the full
+snapshot, which bounds context debt and keeps the free pool fast.
+Pool throttles retry twice with backoff; stalled turns skip one decision
+instead of halting the match.
 
 `OpenCodeRuntime` exports `initialize()`, `createPlayer()`, `turn()`,
 `interrupt()`, `compact()`, `history()`, and `close()` with the same

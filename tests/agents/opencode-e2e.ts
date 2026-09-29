@@ -1,7 +1,7 @@
 // Failure cases: unparsable model prose accepted, invalid action JSON passing
 // validation, missing sessions, duplicate players, unknown threads, missing
-// binaries, rejected settings modes, transient throttles never retried, and
-// lost think/act callbacks.
+// binaries, rejected settings modes, transient throttles never retried,
+// unbounded session growth, and lost think/act callbacks.
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -19,8 +19,8 @@ import {
 import {
   extractActionJson,
   isTransientRunError,
+  messageText,
   parseActionOutput,
-  parseRunEvents,
 } from "../../src/agents/opencode/output";
 
 assert.deepEqual(extractActionJson("no json here"), undefined);
@@ -53,17 +53,12 @@ assert.ok(
     idle.note === "Hold position" &&
     idle.action === undefined,
 );
-const events = parseRunEvents(
-  [
-    JSON.stringify({ type: "session.created", part: { id: "sess-abc" } }),
-    JSON.stringify({ type: "message.part", part: { text: "hello" } }),
-    "not json at all",
-  ].join("\n"),
+assert.equal(
+  messageText([{ type: "text", text: "hi" }, { type: "other" }]),
+  "hi",
 );
-assert.equal(events.sessionId, "sess-abc");
-assert.ok(
-  events.text.includes("hello") && events.text.includes("not json at all"),
-);
+assert.equal(messageText("not parts"), "");
+assert.equal(messageText([{ type: "text", text: 42 }]), "");
 
 assert.equal(ArenaSettingsSchema.parse({ mode: "opencode" }).mode, "opencode");
 assert.equal(ArenaSettingsSchema.parse({}).mode, "codex");
@@ -88,6 +83,10 @@ assert.equal(
   true,
 );
 assert.equal(
+  isSkippableTurnError("This operation was aborted", "opencode"),
+  true,
+);
+assert.equal(
   isSkippableTurnError("OpenCode run failed (exit 1): bad args", "opencode"),
   false,
 );
@@ -96,36 +95,69 @@ assert.equal(
   false,
 );
 
-// Fake opencode binary: answers version/auth probes, fails the first run
-// with a transient throttle, then answers a canned turn.
+// Fake serve: one persistent HTTP child speaking the v1 session endpoints.
+// It fails the first message with a transient throttle, then answers canned
+// turns with incrementing session ids for rotation checks.
 const directory = await mkdtemp(join(tmpdir(), "openfront-opencode-fake-"));
-const fake = join(directory, "fake-opencode.mjs");
+const fake = join(directory, "fake-opencode-serve.mjs");
 await writeFile(
   fake,
-  `import { existsSync, writeFileSync } from "node:fs";
+  `import { createServer } from "node:http";
+import { existsSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-const args = process.argv.slice(2);
-if (args.includes("--version")) { console.log("opencode fake 1.0"); process.exit(0); }
-if (args[0] === "auth") { console.log("[]"); process.exit(0); }
-if (args[0] === "run") {
-  const variant = args[args.indexOf("--variant") + 1];
-  if (args[args.indexOf("--model") + 1] !== "test/model" || variant !== "low") {
-    console.error("unexpected model or variant: " + args.join(" "));
-    process.exit(1);
-  }
-  const marker = join(tmpdir(), "openfront-opencode-fake-once");
-  if (!existsSync(marker)) {
-    writeFileSync(marker, "throttled");
-    console.error("Error 429: rate limited, try again shortly");
-    process.exit(1);
-  }
-  console.log(JSON.stringify({ type: "session.created", part: { id: "sess-fake-1" } }));
-  console.log(JSON.stringify({ type: "message.part", part: { text: '{"note":"Attack now","intent":{"type":"attack","targetID":null,"troops":100}}' } }));
-  process.exit(0);
-}
-console.error("unexpected fake args: " + args.join(" "));
-process.exit(1);
+const port = Number(process.argv[process.argv.indexOf("--port") + 1]);
+let sessions = 0;
+const fail = (response, status, body) => {
+  response.writeHead(status, { "Content-Type": "application/json" });
+  response.end(JSON.stringify(body));
+};
+const server = createServer((request, response) => {
+  let body = "";
+  request.on("data", (chunk) => (body += chunk));
+  request.on("end", () => {
+    if (request.method === "GET" && request.url === "/api/health") {
+      response.writeHead(200, { "Content-Type": "application/json" });
+      response.end(JSON.stringify({ healthy: true, version: "fake-serve-1.0" }));
+      return;
+    }
+    if (request.method === "POST" && request.url === "/session") {
+      sessions++;
+      response.writeHead(200, { "Content-Type": "application/json" });
+      response.end(JSON.stringify({ id: \`sess-fake-\${sessions}\` }));
+      return;
+    }
+    const message = request.url.match(/^\\/session\\/([^/]+)\\/message$/);
+    if (request.method === "POST" && message) {
+      const parsed = JSON.parse(body);
+      if (parsed.variant !== "low" || typeof parsed.system !== "string" || parsed.parts?.[0]?.type !== "text") {
+        fail(response, 400, { message: "unexpected message contract" });
+        return;
+      }
+      const marker = join(tmpdir(), "openfront-opencode-fake-once");
+      if (!existsSync(marker)) {
+        writeFileSync(marker, "throttled");
+        fail(response, 429, { message: "rate limited, try again shortly" });
+        return;
+      }
+      response.writeHead(200, { "Content-Type": "application/json" });
+      response.end(
+        JSON.stringify({
+          info: { id: "msg-fake" },
+          parts: [{ type: "text", text: '{"note":"Attack now","intent":{"type":"attack","targetID":null,"troops":100}}' }],
+        }),
+      );
+      return;
+    }
+    if (request.method === "POST" && request.url.endsWith("/abort")) {
+      response.writeHead(200, { "Content-Type": "application/json" });
+      response.end("true");
+      return;
+    }
+    fail(response, 404, { message: "unknown fake route" });
+  });
+});
+server.listen(port);
 `,
 );
 await rm(join(tmpdir(), "openfront-opencode-fake-once"), { force: true });
@@ -192,19 +224,32 @@ assert.ok(
   seen.some((event) => event.type === "retry"),
   "A transient throttle retries instead of failing the turn",
 );
+const first = (await runtime.history(threadId)) as { sessionId: string };
+assert.equal(first.sessionId, "sess-fake-1");
+for (let turn = 0; turn < 12; turn++) {
+  await runtime.turn(threadId, JSON.stringify({ offense: {} }));
+}
+const rotated = (await runtime.history(threadId)) as { sessionId: string };
+assert.equal(rotated.sessionId, "sess-fake-2");
+assert.ok(
+  seen.some((event) => event.type === "rotation"),
+  "Sessions rotate before context debt accumulates",
+);
 await runtime.interrupt(threadId);
 await runtime.compact(threadId);
-const history = await runtime.history(threadId);
-assert.equal((history as { sessionId: string }).sessionId, "sess-fake-1");
 await runtime.close();
 const manifest = JSON.parse(
   await readFile(join(runtime.artifactDirectory, "runtime.json"), "utf8"),
 ) as {
   provider: string;
+  transport: string;
+  serverVersion: string;
   model: string;
   variant: string;
 };
 assert.equal(manifest.provider, "opencode");
+assert.equal(manifest.transport, "serve");
+assert.equal(manifest.serverVersion, "fake-serve-1.0");
 assert.equal(manifest.model, "test/model");
 assert.equal(manifest.variant, "low");
 
@@ -218,7 +263,7 @@ await writeFile(
       result: "passed",
       status,
       threadId,
-      calls,
+      calls: calls.length,
       manifest,
       eventTypes: seen.map((event) => event.type),
     },

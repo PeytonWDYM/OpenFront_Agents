@@ -71,7 +71,7 @@ const message = (error: unknown) =>
 export function isSkippableTurnError(text: string, mode: string): boolean {
   return (
     mode === "opencode" &&
-    /four-minute ceiling|exit null|timed out|interrupted/i.test(text)
+    /four-minute ceiling|exit null|timed out|interrupt|abort/i.test(text)
   );
 }
 

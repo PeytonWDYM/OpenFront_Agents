@@ -1,13 +1,9 @@
-import { spawn, type ChildProcess } from "node:child_process";
 import { appendFile, mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
-import { currentModel, currentVariant, executable } from "./config";
-import {
-  isTransientRunError,
-  parseActionOutput,
-  parseRunEvents,
-} from "./output";
+import { currentModel, currentVariant } from "./config";
+import { isTransientRunError, messageText, parseActionOutput } from "./output";
+import { OpenCodeServe } from "./serve";
 
 export type GameTool = {
   name: string;
@@ -28,9 +24,10 @@ type Player = {
   onEvent: (event: Record<string, unknown>) => void;
   log: Promise<void>;
   sessionId?: string;
+  turns: number;
 };
 type ActiveTurn = {
-  child?: ChildProcess;
+  controller?: AbortController;
   resolve: () => void;
   reject: (error: Error) => void;
 };
@@ -39,54 +36,46 @@ type ActiveTurn = {
 export const OPENCODE_TURN_TIMEOUT_MS = 240_000;
 const TRANSIENT_RETRIES = 2;
 const TRANSIENT_WAIT_MS = 15_000;
+/** Sessions rotate before context debt can slow the free pool down. */
+const SESSION_TURNS = 12;
 
-/** OpenCode-backed turns over `opencode run --format json`.
+/** OpenCode-backed turns over one persistent `opencode serve` child.
  *
  * Each decision sends the player's own instructions plus the live snapshot
  * and asks for a single JSON action object. The runtime executes the
- * returned think/act calls through the arena bridge. This keeps opencode
- * usage on any user-configured model without a persistent tool-loop server.
+ * returned think/act calls through the arena bridge. A shared server
+ * removes the per-turn process boot, so decisions pace like persistent
+ * model sessions instead of cold CLI starts.
  */
 export class OpenCodeRuntime {
   artifactDirectory = "";
-  private command = "";
-  private launchArgs: string[] = [];
+  private serve?: OpenCodeServe;
   private players = new Map<string, Player>();
   private active = new Map<string, ActiveTurn>();
   private closed = false;
 
   async initialize(): Promise<{ authenticated: boolean; models: string[] }> {
-    const launch = await executable();
-    this.command = launch.command;
-    this.launchArgs = launch.args;
+    this.serve = await OpenCodeServe.launch();
     this.artifactDirectory = await mkdtemp(
       join(tmpdir(), "openfront-opencode-"),
     );
     await mkdir(this.artifactDirectory, { recursive: true });
-    await this.runOnce(["--version"], "", 15_000);
-    let authenticated = true;
-    try {
-      await this.runOnce(["auth", "list"], "", 15_000);
-    } catch {
-      authenticated = false;
-    }
     const model = currentModel();
-    const variant = currentVariant();
-    const models = [model];
     await writeFile(
       join(this.artifactDirectory, "runtime.json"),
       JSON.stringify(
         {
           provider: "opencode",
+          transport: "serve",
+          serverVersion: this.serve.version,
           model,
-          variant,
-          command: this.command,
+          variant: currentVariant(),
         },
         null,
         2,
       ),
     );
-    return { authenticated, models };
+    return { authenticated: true, models: [model] };
   }
 
   async createPlayer(
@@ -100,12 +89,15 @@ export class OpenCodeRuntime {
     )
       throw new Error("The player already has an OpenCode session.");
     const threadId = `opencode-${definition.id}-${Date.now().toString(36)}`;
+    const sessionId = await this.createSession(threadId);
     this.players.set(threadId, {
       id: definition.id,
       prompt: definition.prompt,
       onTool,
       onEvent,
       log: Promise.resolve(),
+      sessionId,
+      turns: 0,
     });
     await writeFile(
       join(this.artifactDirectory, `${threadId}.json`),
@@ -114,6 +106,7 @@ export class OpenCodeRuntime {
           playerId: definition.id,
           threadId,
           provider: "opencode",
+          transport: "serve",
           model: currentModel(),
           variant: currentVariant(),
           prompt: definition.prompt,
@@ -126,6 +119,7 @@ export class OpenCodeRuntime {
     this.emit(threadId, {
       type: "configuration",
       provider: "opencode",
+      transport: "serve",
       model: currentModel(),
       variant: currentVariant(),
       tools: definition.tools.map((tool) => tool.name),
@@ -165,16 +159,19 @@ export class OpenCodeRuntime {
   }
 
   async interrupt(threadId: string): Promise<void> {
-    this.player(threadId);
-    const active = this.active.get(threadId);
-    if (!active?.child) return;
-    active.child.kill("SIGTERM");
+    const player = this.player(threadId);
+    this.active.get(threadId)?.controller?.abort();
+    // Best effort: the in-flight message ends on abort either way.
+    if (player.sessionId) {
+      await this.serve
+        ?.request("POST", `/session/${player.sessionId}/abort`)
+        .catch(() => undefined);
+    }
   }
 
   async compact(threadId: string): Promise<void> {
     const player = this.player(threadId);
-    // JSON turns are stateless per decision; the arena already resends the
-    // full snapshot, so compaction only records a checkpoint event.
+    // Sessions rotate every few turns, so no compaction debt accumulates.
     this.emit(threadId, {
       type: "compact",
       sessionId: player.sessionId ?? null,
@@ -192,15 +189,30 @@ export class OpenCodeRuntime {
 
   async close(): Promise<void> {
     this.closed = true;
-    for (const active of this.active.values()) active.child?.kill("SIGTERM");
+    for (const active of this.active.values()) active.controller?.abort();
     this.active.clear();
     await Promise.all([...this.players.values()].map((player) => player.log));
+    await this.serve?.close();
+    this.serve = undefined;
   }
 
   private player(threadId: string): Player {
     const player = this.players.get(threadId);
     if (!player) throw new Error(`Unknown OpenCode game thread: ${threadId}`);
     return player;
+  }
+
+  private modelRef(): { providerID: string; modelID: string } {
+    const [providerID, ...rest] = currentModel().split("/");
+    return { providerID, modelID: rest.join("/") };
+  }
+
+  private async createSession(threadId: string): Promise<string> {
+    const session = (await this.serve?.request("POST", "/session", {
+      title: `OpenFront ${threadId}`,
+    })) as { id: string };
+    if (!session?.id) throw new Error("OpenCode did not return a session.");
+    return session.id;
   }
 
   private emit(threadId: string, event: Record<string, unknown>) {
@@ -222,6 +234,17 @@ export class OpenCodeRuntime {
     images: readonly GameImage[],
     active: ActiveTurn,
   ): Promise<void> {
+    if (
+      !player.sessionId ||
+      (player.turns > 0 && player.turns % SESSION_TURNS === 0)
+    ) {
+      player.sessionId = await this.createSession(threadId);
+      player.turns = 0;
+      this.emit(threadId, {
+        type: "rotation",
+        sessionId: player.sessionId,
+      });
+    }
     // The turn carries the player's own instructions plus the live state.
     // No harness strategy coaching is added; the only extra lines are the
     // machine-readable reply envelope the parser needs.
@@ -234,22 +257,35 @@ export class OpenCodeRuntime {
       "Reply with one JSON object and no other prose.",
       'Shape: {"note":"short plan","intent":{...} | "intents":[{...}],"attackRatio":0..1,"nextDecisionSeconds":1..10}. Omit intent when no action helps.',
     ].join("\n");
-    // The prompt goes right after `run`: opencode's --file flag consumes
-    // every trailing argument, so image attachments must come last.
-    const args = ["run", prompt, "--format", "json"];
-    args.push("--model", currentModel(), "--variant", currentVariant());
-    if (player.sessionId) args.push("--session", player.sessionId);
-    // Turns run in the artifact directory, so frame paths relative to the
-    // repo root must become absolute before handoff.
-    for (const image of images)
-      args.push(
-        "--file",
-        isAbsolute(image.path) ? image.path : resolve(image.path),
-      );
-    let stdout: string | undefined;
+    const parts: Record<string, unknown>[] = [{ type: "text", text: prompt }];
+    // Frame paths relative to the repo root must become absolute URIs.
+    for (const image of images) {
+      const absolute = isAbsolute(image.path)
+        ? image.path
+        : resolve(image.path);
+      parts.push({
+        type: "file",
+        mime: "image/png",
+        url: `file:///${absolute.replace(/\\/g, "/")}`,
+      });
+    }
+    const activeController = new AbortController();
+    active.controller = activeController;
+    let answer: unknown;
     for (let attempt = 0; ; attempt++) {
       try {
-        stdout = await this.spawnRun(args, active);
+        const model = this.modelRef();
+        answer = await this.serve?.request(
+          "POST",
+          `/session/${player.sessionId}/message`,
+          {
+            model: { providerID: model.providerID, modelID: model.modelID },
+            variant: currentVariant(),
+            system: player.prompt,
+            parts,
+          },
+          activeController.signal,
+        );
         break;
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -264,109 +300,47 @@ export class OpenCodeRuntime {
           );
           continue;
         }
-        this.emit(threadId, {
-          type: "error",
-          message,
-        });
+        this.emit(threadId, { type: "error", message });
         throw error;
       }
     }
-    const parsed = parseRunEvents(stdout);
-    if (parsed.sessionId) player.sessionId = parsed.sessionId;
+    player.turns++;
+    const response = messageText(
+      (answer as { parts?: unknown })?.parts ?? answer,
+    );
     this.emit(threadId, {
       type: "response",
       sessionId: player.sessionId ?? null,
-      text: parsed.text.slice(0, 8_000),
+      text: response.slice(0, 8_000),
     });
-    const output = parseActionOutput(parsed.text);
+    const output = parseActionOutput(response);
     if ("error" in output) {
       this.emit(threadId, { type: "unparsable", message: output.error });
       return;
     }
+    // Bridge rejections (like the one-build limit) guide the next decision;
+    // they must not fail the turn or halt the match.
     if (output.note !== undefined) {
-      await player.onTool("think", { note: output.note });
+      try {
+        await player.onTool("think", { note: output.note });
+      } catch (error) {
+        this.emit(threadId, {
+          type: "tool_error",
+          tool: "think",
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
     if (output.action !== undefined) {
-      await player.onTool("act", output.action);
+      try {
+        await player.onTool("act", output.action);
+      } catch (error) {
+        this.emit(threadId, {
+          type: "tool_error",
+          tool: "act",
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
-  }
-
-  private spawnRun(args: string[], active: ActiveTurn): Promise<string> {
-    return new Promise((resolve, reject) => {
-      const child = spawn(this.command, [...this.launchArgs, ...args], {
-        cwd: this.artifactDirectory,
-        windowsHide: true,
-        // A piped stdin makes the CLI wait for input; turns pass everything
-        // as arguments, so close it up front.
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-      active.child = child;
-      let stdout = "";
-      let stderr = "";
-      const timer = setTimeout(() => {
-        child.kill("SIGTERM");
-        reject(new Error("OpenCode turn exceeded its four-minute ceiling."));
-      }, OPENCODE_TURN_TIMEOUT_MS);
-      child.stdout?.on("data", (chunk: Buffer) => {
-        stdout += chunk.toString("utf8");
-      });
-      child.stderr?.on("data", (chunk: Buffer) => {
-        stderr += chunk.toString("utf8");
-      });
-      child.on("error", (error) => {
-        clearTimeout(timer);
-        reject(error);
-      });
-      child.on("close", (code) => {
-        clearTimeout(timer);
-        if (code === 0) resolve(stdout);
-        else
-          reject(
-            new Error(
-              `OpenCode run failed (exit ${code}): ${stderr.slice(0, 500)}`,
-            ),
-          );
-      });
-    });
-  }
-
-  private runOnce(
-    args: string[],
-    input: string,
-    timeoutMs: number,
-  ): Promise<string> {
-    return new Promise((resolve, reject) => {
-      const child = spawn(this.command, [...this.launchArgs, ...args], {
-        windowsHide: true,
-      });
-      let stdout = "";
-      let stderr = "";
-      const timer = setTimeout(() => {
-        child.kill("SIGTERM");
-        reject(new Error("The OpenCode probe timed out."));
-      }, timeoutMs);
-      child.stdout?.on("data", (chunk: Buffer) => {
-        stdout += chunk.toString("utf8");
-      });
-      child.stderr?.on("data", (chunk: Buffer) => {
-        stderr += chunk.toString("utf8");
-      });
-      child.on("error", (error) => {
-        clearTimeout(timer);
-        reject(error);
-      });
-      child.on("close", (code) => {
-        clearTimeout(timer);
-        if (code === 0) resolve(stdout);
-        else
-          reject(
-            new Error(
-              `OpenCode probe failed (exit ${code}): ${stderr.slice(0, 300)}`,
-            ),
-          );
-      });
-      if (input) child.stdin?.write(input);
-      child.stdin?.end();
-    });
   }
 }
