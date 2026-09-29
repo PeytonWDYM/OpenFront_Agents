@@ -70,6 +70,8 @@ The runtime copies model metadata from the existing catalog and keeps its contex
 It removes native shell, patch, clock, user-message, code mode, and multi-agent declarations.
 This uses Codex's supported `model_catalog_json` setting. It does not change the remote model or provider.
 All player tools use app-server `dynamicTools` with direct function exposure.
+Players receive `observe_world`, `act`, and `think`. The `think` tool records a short strategy summary and can request a focused observation.
+It shares the same observation filters and four-call allowance. It does not change Low reasoning or submit game actions.
 Tool arguments arrive as `unknown`. The game bridge must validate arguments against its game contracts.
 Unknown tools and callback errors return failed tool results.
 Game tool callbacks return `{ data, images? }`. The runtime sends JSON data as native `inputText` content.

@@ -58,10 +58,15 @@ The bridge reads the latest native tick when a decision starts. Tick updates alo
 It supplies only events newer than that agent's previous observation. Inspector logs stay local and are not appended to each prompt.
 Earlier decisions remain in the persistent Codex thread and can contribute cached input until native compaction.
 Agents can request focused data when they need exact tiles, costs, or communication choices.
+Each decision includes current build prices, including units the agent cannot yet afford.
+The action bridge checks native build legality before submission. Invalid builds report the required gold and current balance.
+Troop transports use `boat`, so they do not appear as `build_unit` placement hints.
 They also receive native victory progress and a short public leaderboard. A leaderboard query returns all living players and scoreboard columns.
 Public trade observations and map cues identify ship owners, destination Ports, and owner or destination affiliations.
 Warship hints use legal water patrol targets. Agents can submit one or two native actions in a single `act` call.
 Batch actions share the existing per-decision allowance and return individual submission results.
+The `think` tool records a short strategy note and can inspect a focused region in the same call.
+It keeps Low reasoning and the existing call allowance. Routine decisions can act directly.
 They can request a regional image or inspect owned units and public enemy structures within that region.
 They can also focus an image on any human, nation, or tribe by its native player ID.
 Focused views show current public territory and keep the requesting agent's private information separate.
