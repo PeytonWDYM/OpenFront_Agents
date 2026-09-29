@@ -6,6 +6,10 @@ import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ArenaSettingsSchema } from "../../src/agents/Settings";
+import {
+  DEFAULT_MODEL,
+  DEFAULT_VARIANT,
+} from "../../src/agents/opencode/config";
 import { OpenCodeRuntime } from "../../src/agents/opencode/index";
 import {
   extractActionJson,
@@ -58,6 +62,9 @@ assert.ok(
 assert.equal(ArenaSettingsSchema.parse({ mode: "opencode" }).mode, "opencode");
 assert.equal(ArenaSettingsSchema.parse({}).mode, "codex");
 assert.throws(() => ArenaSettingsSchema.parse({ mode: "bogus" }));
+// The default pins the free model slug exactly as `opencode models` lists it.
+assert.equal(DEFAULT_MODEL, "opencode/muse-spark-1.3-contributor-free");
+assert.equal(DEFAULT_VARIANT, "medium");
 
 // Fake opencode binary: answers version/auth probes and one canned turn.
 const directory = await mkdtemp(join(tmpdir(), "openfront-opencode-fake-"));
