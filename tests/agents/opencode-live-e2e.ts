@@ -44,11 +44,23 @@ await runtime.turn(
     self: { troops: 1000, gold: 5000 },
   }),
 );
+// A second turn proves session continuation. A real map frame is attached
+// when a previous vision run left one behind; synthetic pixels are rejected
+// by the provider, so the image leg stays optional.
+let frame: string | undefined;
+try {
+  const { globSync } = await import("node:fs");
+  const frames = globSync(".agent-arena/frames/**/*.png").slice(0, 1);
+  frame = frames[0] as string | undefined;
+} catch {
+  frame = undefined;
+}
 const history = (await runtime.history(threadId)) as { sessionId: string };
 assert.ok(history.sessionId.startsWith("ses_"), "A real session continues");
 await runtime.turn(
   threadId,
   JSON.stringify({ offense: { attackableBorders: 1 } }),
+  frame ? [{ path: frame }] : [],
 );
 await runtime.close();
 
@@ -61,6 +73,7 @@ await writeFile(
       model: DEFAULT_MODEL,
       variant: DEFAULT_VARIANT,
       sessionId: history.sessionId,
+      imageAttached: frame ?? null,
       calls,
     },
     null,

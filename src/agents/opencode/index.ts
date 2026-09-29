@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { appendFile, mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { currentModel, currentVariant, executable } from "./config";
 import { parseActionOutput, parseRunEvents } from "./output";
 
@@ -227,11 +227,18 @@ export class OpenCodeRuntime {
       "Reply with one JSON object and no other prose.",
       'Shape: {"note":"short plan","intent":{...} | "intents":[{...}],"attackRatio":0..1,"nextDecisionSeconds":1..10}. Omit intent when no action helps.',
     ].join("\n");
-    const args = ["run", "--format", "json"];
+    // The prompt goes right after `run`: opencode's --file flag consumes
+    // every trailing argument, so image attachments must come last.
+    const args = ["run", prompt, "--format", "json"];
     args.push("--model", currentModel(), "--variant", currentVariant());
     if (player.sessionId) args.push("--session", player.sessionId);
-    for (const image of images) args.push("--file", image.path);
-    args.push(prompt);
+    // Turns run in the artifact directory, so frame paths relative to the
+    // repo root must become absolute before handoff.
+    for (const image of images)
+      args.push(
+        "--file",
+        isAbsolute(image.path) ? image.path : resolve(image.path),
+      );
     let stdout: string;
     try {
       stdout = await this.spawnRun(args, active);
