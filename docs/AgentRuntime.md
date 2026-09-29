@@ -8,8 +8,8 @@ deterministic verification only.
 
 The runtime shells out to the user's own `opencode` binary, so any model
 already configured there can play. The default is Muse Spark 1.3 Free
-(`opencode/muse-spark-1.3-contributor-free`) at medium reasoning
-(`--variant medium`). Set `OPENFRONT_OPENCODE_MODEL` to `provider/model`
+(`opencode/muse-spark-1.3-contributor-free`) at low reasoning
+(`--variant low`). Set `OPENFRONT_OPENCODE_MODEL` to `provider/model`
 to pin another model and `OPENFRONT_OPENCODE_VARIANT` for another effort.
 Set `OPENFRONT_OPENCODE_EXECUTABLE` to an explicit binary path
 (a `.mjs` fake works for offline tests).

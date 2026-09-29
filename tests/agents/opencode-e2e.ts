@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { isSkippableTurnError } from "../../src/agents/Arena";
 import { ArenaSettingsSchema } from "../../src/agents/Settings";
 import {
   DEFAULT_MODEL,
@@ -69,12 +70,31 @@ assert.equal(ArenaSettingsSchema.parse({}).mode, "codex");
 assert.throws(() => ArenaSettingsSchema.parse({ mode: "bogus" }));
 // The default pins the free model slug exactly as `opencode models` lists it.
 assert.equal(DEFAULT_MODEL, "opencode/muse-spark-1.3-contributor-free");
-assert.equal(DEFAULT_VARIANT, "medium");
+assert.equal(DEFAULT_VARIANT, "low");
 assert.equal(OPENCODE_TURN_TIMEOUT_MS, 240_000);
 assert.equal(isTransientRunError("Error 429: rate limited, try again"), true);
 assert.equal(isTransientRunError("provider overloaded, retry later"), true);
 assert.equal(isTransientRunError("Error: File not found: prompt text"), false);
 assert.equal(isTransientRunError("OpenCode turn exceeded its ceiling"), false);
+assert.equal(
+  isSkippableTurnError("OpenCode run failed (exit null): ", "opencode"),
+  true,
+);
+assert.equal(
+  isSkippableTurnError(
+    "OpenCode turn exceeded its four-minute ceiling.",
+    "opencode",
+  ),
+  true,
+);
+assert.equal(
+  isSkippableTurnError("OpenCode run failed (exit 1): bad args", "opencode"),
+  false,
+);
+assert.equal(
+  isSkippableTurnError("OpenCode run failed (exit null): ", "codex"),
+  false,
+);
 
 // Fake opencode binary: answers version/auth probes, fails the first run
 // with a transient throttle, then answers a canned turn.
@@ -90,7 +110,7 @@ if (args.includes("--version")) { console.log("opencode fake 1.0"); process.exit
 if (args[0] === "auth") { console.log("[]"); process.exit(0); }
 if (args[0] === "run") {
   const variant = args[args.indexOf("--variant") + 1];
-  if (args[args.indexOf("--model") + 1] !== "test/model" || variant !== "medium") {
+  if (args[args.indexOf("--model") + 1] !== "test/model" || variant !== "low") {
     console.error("unexpected model or variant: " + args.join(" "));
     process.exit(1);
   }
@@ -186,7 +206,7 @@ const manifest = JSON.parse(
 };
 assert.equal(manifest.provider, "opencode");
 assert.equal(manifest.model, "test/model");
-assert.equal(manifest.variant, "medium");
+assert.equal(manifest.variant, "low");
 
 delete process.env.OPENFRONT_OPENCODE_EXECUTABLE;
 delete process.env.OPENFRONT_OPENCODE_MODEL;
