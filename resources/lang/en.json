@@ -2468,7 +2468,7 @@
     "usage_pending": "Usage pending",
     "vision_image": "World map seen by this agent",
     "working": "Creating lobby…",
-    "model_opencode": "OpenCode model - JSON turns",
+    "model_opencode": "OpenCode - Muse Spark 1.3 Free default",
     "provider_label": "Provider",
     "provider_codex": "Codex (gpt-6-luna)",
     "provider_opencode": "OpenCode (your configured model)"

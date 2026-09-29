@@ -1,4 +1,4 @@
-// Failure cases: prompt without an attack-first rule, double structure builds
+// Failure cases: prompt without offense guidance, double structure builds
 // passing, single attack+build batches rejected, missing offense signals,
 // build streaks that never reset, affordable missiles hidden with a ready
 // silo, and decision snapshots without offense data.
@@ -27,20 +27,20 @@ import type { ClientMessage, Turn } from "../../src/core/Schemas";
 
 const prompt = playerPrompt("Agent 1");
 for (const required of [
-  "attack first",
-  "missile",
-  "two structure builds",
-  "must attack now",
-  "hoard gold",
+  "weighs offense alongside defense",
+  "supporting role",
+  "recent balance",
+  "reward timing",
+  "punish idle or purely economic turns",
 ]) {
   assert.ok(
     prompt.toLowerCase().includes(required.toLowerCase()),
-    `Aggressive prompt mentions: ${required}`,
+    `Guiding prompt mentions: ${required}`,
   );
 }
 assert.ok(
-  !prompt.includes("Do not habitually spend both actions on attacks"),
-  "The old build-first guidance is gone",
+  !prompt.toLowerCase().includes("you must attack"),
+  "The prompt guides instead of ordering attacks",
 );
 
 // Intent classification never confuses economy with offense.

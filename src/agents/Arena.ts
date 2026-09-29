@@ -568,7 +568,7 @@ export class Arena {
         }, 90_000);
         await this.runtime!.turn(
           player.threadId!,
-          `Use this current state and map. Attack every decision when a legal attack, landing, or affordable missile exists; building alone is forbidden as a full turn. Pair at most one structure build with one attack. If missiles are ready and affordable, strike a high-value rival instead of hoarding gold. Choose useful actions: ${text}`,
+          `Use this current state and map. The offense summary shows legal attacks, landings, and affordable missiles alongside construction options; weigh them against expansion and defense, keeping in mind that idle economy tends to lose ground to expanding rivals. Choose useful actions: ${text}`,
           frames,
         );
       }

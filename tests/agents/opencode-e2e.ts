@@ -68,6 +68,11 @@ await writeFile(
 if (args.includes("--version")) { console.log("opencode fake 1.0"); process.exit(0); }
 if (args[0] === "auth") { console.log("[]"); process.exit(0); }
 if (args[0] === "run") {
+  const variant = args[args.indexOf("--variant") + 1];
+  if (args[args.indexOf("--model") + 1] !== "test/model" || variant !== "medium") {
+    console.error("unexpected model or variant: " + args.join(" "));
+    process.exit(1);
+  }
   console.log(JSON.stringify({ type: "session.created", part: { id: "sess-fake-1" } }));
   console.log(JSON.stringify({ type: "message.part", part: { text: '{"note":"Attack now","intent":{"type":"attack","targetID":null,"troops":100}}' } }));
   process.exit(0);
@@ -145,9 +150,11 @@ const manifest = JSON.parse(
 ) as {
   provider: string;
   model: string;
+  variant: string;
 };
 assert.equal(manifest.provider, "opencode");
 assert.equal(manifest.model, "test/model");
+assert.equal(manifest.variant, "medium");
 
 delete process.env.OPENFRONT_OPENCODE_EXECUTABLE;
 delete process.env.OPENFRONT_OPENCODE_MODEL;

@@ -7,19 +7,23 @@ deterministic verification only.
 ## OpenCode runtime
 
 The runtime shells out to the user's own `opencode` binary, so any model
-already configured there can play. Set `OPENFRONT_OPENCODE_MODEL` to
-`provider/model` to pin a model; otherwise the user's opencode default
-is used. Set `OPENFRONT_OPENCODE_EXECUTABLE` to an explicit binary path
+already configured there can play. The default is Muse Spark 1.3 Free
+(`opencode/muse-spark-1-3-contributor-free`) at medium reasoning
+(`--variant medium`). Set `OPENFRONT_OPENCODE_MODEL` to `provider/model`
+to pin another model and `OPENFRONT_OPENCODE_VARIANT` for another effort.
+Set `OPENFRONT_OPENCODE_EXECUTABLE` to an explicit binary path
 (a `.mjs` fake works for offline tests).
 
-Each decision sends the aggressive base prompt plus the live snapshot and
+Each decision sends the player's own instructions plus the live snapshot and
 asks for a single JSON action object (`note`, `intent`/`intents`,
-`attackRatio`, `nextDecisionSeconds`). The runtime executes the returned
-think/act calls through the arena bridge, so the one-structure-build
-limit and the two-action budget apply to OpenCode players too. Map images
-from the current decision are attached with `--file`. Sessions continue
-with `--session` when the CLI reports one; every decision already carries
-the full snapshot, so a lost session degrades to stateless play.
+`attackRatio`, `nextDecisionSeconds`). No harness strategy coaching is
+added; the only extra lines are the machine-readable reply envelope the
+parser needs. The runtime executes the returned think/act calls through
+the arena bridge, so the one-structure-build limit and the two-action
+budget apply to OpenCode players too. Map images from the current decision
+are attached with `--file`. Sessions continue with `--session` when the
+CLI reports one; every decision already carries the full snapshot, so a
+lost session degrades to stateless play.
 
 `OpenCodeRuntime` exports `initialize()`, `createPlayer()`, `turn()`,
 `interrupt()`, `compact()`, `history()`, and `close()` with the same

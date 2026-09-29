@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { appendFile, mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { currentModel, executable } from "./config";
+import { currentModel, currentVariant, executable } from "./config";
 import { parseActionOutput, parseRunEvents } from "./output";
 
 export type GameTool = {
@@ -35,10 +35,10 @@ const TURN_TIMEOUT_MS = 90_000;
 
 /** OpenCode-backed turns over `opencode run --format json`.
  *
- * Each decision sends the base prompt plus the live snapshot and asks for a
- * single JSON action object. The runtime executes the returned think/act
- * calls through the arena bridge. This keeps opencode usage on any
- * user-configured model without a persistent tool-loop server.
+ * Each decision sends the player's own instructions plus the live snapshot
+ * and asks for a single JSON action object. The runtime executes the
+ * returned think/act calls through the arena bridge. This keeps opencode
+ * usage on any user-configured model without a persistent tool-loop server.
  */
 export class OpenCodeRuntime {
   artifactDirectory = "";
@@ -64,13 +64,15 @@ export class OpenCodeRuntime {
       authenticated = false;
     }
     const model = currentModel();
-    const models = model ? [model] : ["opencode-default"];
+    const variant = currentVariant();
+    const models = [model];
     await writeFile(
       join(this.artifactDirectory, "runtime.json"),
       JSON.stringify(
         {
           provider: "opencode",
-          model: model || "default",
+          model,
+          variant,
           command: this.command,
         },
         null,
@@ -105,7 +107,8 @@ export class OpenCodeRuntime {
           playerId: definition.id,
           threadId,
           provider: "opencode",
-          model: currentModel() || "default",
+          model: currentModel(),
+          variant: currentVariant(),
           prompt: definition.prompt,
           tools: definition.tools.map((tool) => tool.name),
         },
@@ -116,7 +119,8 @@ export class OpenCodeRuntime {
     this.emit(threadId, {
       type: "configuration",
       provider: "opencode",
-      model: currentModel() || "default",
+      model: currentModel(),
+      variant: currentVariant(),
       tools: definition.tools.map((tool) => tool.name),
     });
     return threadId;
@@ -208,19 +212,20 @@ export class OpenCodeRuntime {
     images: readonly GameImage[],
     active: ActiveTurn,
   ): Promise<void> {
+    // The turn carries the player's own instructions plus the live state.
+    // No harness strategy coaching is added; the only extra lines are the
+    // machine-readable reply envelope the parser needs.
     const prompt = [
       player.prompt,
       "",
-      "Reply with ONLY one JSON object. No prose outside the JSON.",
-      'Shape: {"note":"short plan","intent":{...} | "intents":[{...}],"attackRatio":0..1,"nextDecisionSeconds":1..10}.',
-      "Omit intent when no action helps. Always attack, land, or strike when offense.attackableBorders > 0, boatTargets exist, or affordableMissiles is non-empty.",
-      "At most one structure build per decision; pair it with an attack. Never output two structure builds.",
       "Current state:",
       text,
+      "",
+      "Reply with one JSON object and no other prose.",
+      'Shape: {"note":"short plan","intent":{...} | "intents":[{...}],"attackRatio":0..1,"nextDecisionSeconds":1..10}. Omit intent when no action helps.',
     ].join("\n");
     const args = ["run", "--format", "json"];
-    const configured = currentModel();
-    if (configured) args.push("--model", configured);
+    args.push("--model", currentModel(), "--variant", currentVariant());
     if (player.sessionId) args.push("--session", player.sessionId);
     for (const image of images) args.push("--file", image.path);
     args.push(prompt);
