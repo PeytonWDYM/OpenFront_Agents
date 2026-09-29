@@ -78,54 +78,19 @@ export function isTransientRunError(message: string): boolean {
   return /rate|limit|429|overloaded|temporar|busy|try again/i.test(message);
 }
 
-/** Best-effort session and text recovery from `opencode run --format json`. */
-export function parseRunEvents(stdout: string): {
-  text: string;
-  sessionId?: string;
-} {
+/** Join assistant text parts from a serve message response. */
+export function messageText(parts: unknown): string {
+  if (!Array.isArray(parts)) return "";
   const chunks: string[] = [];
-  let sessionId: string | undefined;
-  for (const line of stdout.split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    try {
-      const event = JSON.parse(trimmed) as Record<string, unknown>;
-      const type = typeof event.type === "string" ? event.type : "";
-      const part = (event.part ?? event.data ?? event) as Record<
-        string,
-        unknown
-      >;
-      if (typeof event.sessionID === "string") sessionId = event.sessionID;
-      if (typeof event.sessionId === "string") sessionId = event.sessionId;
-      if (
-        (type.includes("session") || type.includes("created")) &&
-        typeof part.id === "string" &&
-        part.id.length >= 8
-      ) {
-        sessionId ??= part.id;
-      }
-      const text =
-        typeof part.text === "string"
-          ? part.text
-          : typeof event.text === "string"
-            ? event.text
-            : typeof part.content === "string"
-              ? part.content
-              : undefined;
-      if (
-        text &&
-        (type.includes("message") ||
-          type.includes("text") ||
-          type.includes("part") ||
-          type.includes("assistant") ||
-          type === "event")
-      ) {
-        chunks.push(text);
-      }
-    } catch {
-      chunks.push(line);
+  for (const part of parts) {
+    if (
+      typeof part === "object" &&
+      part !== null &&
+      (part as { type?: unknown }).type === "text" &&
+      typeof (part as { text?: unknown }).text === "string"
+    ) {
+      chunks.push((part as { text: string }).text);
     }
   }
-  const text = chunks.length > 0 ? chunks.join("\n") : stdout.trim();
-  return sessionId ? { text, sessionId } : { text };
+  return chunks.join("\n");
 }
