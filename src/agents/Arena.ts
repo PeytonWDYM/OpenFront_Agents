@@ -67,6 +67,14 @@ export const ThinkQuerySchema = z
 const message = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
 
+/** Stall-style OpenCode turn failures skip one decision instead of halting. */
+export function isSkippableTurnError(text: string, mode: string): boolean {
+  return (
+    mode === "opencode" &&
+    /four-minute ceiling|exit null|timed out|interrupted/i.test(text)
+  );
+}
+
 export class Arena {
   private state: ArenaSnapshot = {
     phase: "idle",
@@ -196,12 +204,11 @@ export class Arena {
           this.logs.add(player.id, "thread", player.threadId);
         }
       }
-      // The free pool answers slower than Codex, so OpenCode matches run
-      // fewer concurrent turns to stay under its dynamic limits.
+      // OpenCode matches Codex concurrency; slow free-pool turns set the
+      // pace per agent, and the queue still defaults each agent to a
+      // decision every ten seconds once its turn completes.
       this.queue = new TurnQueue(
-        Math.ceil(
-          settings.agentCount / (settings.mode === "opencode" ? 10 : 4),
-        ),
+        Math.ceil(settings.agentCount / 4),
         (id) =>
           this.state.phase === "running" &&
           this.player(id).alive &&
@@ -586,6 +593,12 @@ export class Arena {
       return this.requestedDelays.get(id);
     } catch (error) {
       if (this.state.phase === "running") {
+        // A stalled free-pool turn is routine, not fatal: skip it and let
+        // the queue schedule the next decision instead of halting the match.
+        if (isSkippableTurnError(message(error), this.state.settings.mode)) {
+          this.logs.add(id, "decision", `Skipped: ${message(error)}`);
+          return;
+        }
         player.error = message(error);
         this.logs.add(id, "error", player.error);
         this.state.error = player.error;

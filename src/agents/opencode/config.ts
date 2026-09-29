@@ -4,7 +4,7 @@ import { delimiter, join } from "node:path";
 /** Default model in provider/model format: Muse Spark 1.3 Free on OpenCode Zen. */
 export const DEFAULT_MODEL = "opencode/muse-spark-1.3-contributor-free";
 /** Default reasoning variant passed through opencode's --variant flag. */
-export const DEFAULT_VARIANT = "medium";
+export const DEFAULT_VARIANT = "low";
 
 /** Model in provider/model format. Override with OPENFRONT_OPENCODE_MODEL. */
 export function currentModel(): string {
