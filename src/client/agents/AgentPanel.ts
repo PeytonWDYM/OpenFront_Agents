@@ -325,7 +325,9 @@ export class AgentPanel extends LitElement {
                 ${translateText(
                   lobby.settings.mode === "codex"
                     ? "agents.model"
-                    : "agents.scripted_mode",
+                    : lobby.settings.mode === "opencode"
+                      ? "agents.model_opencode"
+                      : "agents.scripted_mode",
                 )}
               </div>
               <details class="usage-breakdown">

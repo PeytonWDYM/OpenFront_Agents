@@ -39,6 +39,36 @@ import {
 } from "./schemas";
 
 const ADMIN_KEY = "WARNING_DEV_ADMIN_BOT_KEY_DO_NOT_USE_IN_PRODUCTION";
+// Structure builds grow economy or defense. Weapon builds (nukes, warships)
+// and attacks/landings count as offense and reset the build streak.
+const STRUCTURE_UNITS: ReadonlySet<string> = new Set([
+  UnitType.City,
+  UnitType.Port,
+  UnitType.Factory,
+  UnitType.DefensePost,
+  UnitType.SAMLauncher,
+  UnitType.MissileSilo,
+]);
+/** A structure build or upgrade without an accompanying attack. */
+export function isStructureBuild(intent: { type: string }): boolean {
+  if (intent.type === "upgrade_structure") return true;
+  return (
+    intent.type === "build_unit" &&
+    "unit" in intent &&
+    typeof (intent as { unit: unknown }).unit === "string" &&
+    STRUCTURE_UNITS.has((intent as { unit: string }).unit)
+  );
+}
+/** An attack, landing, or weapon launch. Resets the build streak. */
+export function isOffenseIntent(intent: { type: string }): boolean {
+  if (intent.type === "attack" || intent.type === "boat") return true;
+  return (
+    intent.type === "build_unit" &&
+    "unit" in intent &&
+    typeof (intent as { unit: unknown }).unit === "string" &&
+    !STRUCTURE_UNITS.has((intent as { unit: string }).unit)
+  );
+}
 /** Resolve a native ID and public territory without reading the target's resources. */
 export function publicPlayerFocus(
   game: Game,
@@ -86,6 +116,7 @@ export class AgentGame {
   private histories = new Map<string, AgentEvent[]>();
   private incomingAttacks = new Map<string, Set<string>>();
   private attackRatios = new Map<string, number>();
+  private buildStreaks = new Map<string, number>();
   private mapImages?: MapImages;
   private gameId_ = "";
   private workerId = 0;
@@ -160,6 +191,7 @@ export class AgentGame {
       this.histories.set(id, []);
       this.incomingAttacks.set(id, new Set());
       this.attackRatios.set(id, 0.2);
+      this.buildStreaks.set(id, 0);
     }
     await Promise.all(
       this.seats.map((seat, index) =>
@@ -343,6 +375,7 @@ export class AgentGame {
       ObserveQuerySchema.parse(query),
       this.histories.get(agentId)!,
       this.attackRatios.get(agentId)!,
+      this.buildStreaks.get(agentId) ?? 0,
     );
     observation.gameId = this.gameId_;
     return observation;
@@ -429,6 +462,9 @@ export class AgentGame {
       intent = { ...intent, troops: player.troops() * ratio };
     this.seat(agentId).send({ type: "intent", intent });
     this.attackRatios.set(agentId, ratio);
+    if (isOffenseIntent(intent)) this.buildStreaks.set(agentId, 0);
+    else if (isStructureBuild(intent))
+      this.buildStreaks.set(agentId, (this.buildStreaks.get(agentId) ?? 0) + 1);
     return {
       accepted: true as const,
       tick: this.runner!.game.ticks(),

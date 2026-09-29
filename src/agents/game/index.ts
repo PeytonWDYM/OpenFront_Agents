@@ -1,4 +1,4 @@
-export { AgentGame } from "./AgentGame";
+export { AgentGame, isOffenseIntent, isStructureBuild } from "./AgentGame";
 export type { AgentGameOptions } from "./AgentGame";
 export { projectDecisionObservation } from "./decision";
 export { isUrgentAgentEvent } from "./events";

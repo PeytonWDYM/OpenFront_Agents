@@ -15,6 +15,7 @@ import {
   ObserveQuerySchema,
   quickChatKeys,
 } from "./game/schemas";
+import { OpenCodeRuntime } from "./opencode/index";
 import { playerPrompt } from "./PlayerPrompt";
 import { scriptedAction } from "./ScriptedPlayer";
 import { ArenaSettingsSchema, defaultSettings } from "./Settings";
@@ -76,7 +77,7 @@ export class Arena {
     totalTokens: 0,
   };
   private game: AgentGame | null = null;
-  private runtime: CodexRuntime | null = null;
+  private runtime: CodexRuntime | OpenCodeRuntime | null = null;
   private queue: TurnQueue | null = null;
   private logs = new EventLog();
   private readonly suppliedTicks = new Map<string, number>();
@@ -126,6 +127,13 @@ export class Arena {
         if (!this.state.runtime.models.includes("gpt-6-luna"))
           throw new Error(
             "The authenticated Codex runtime does not offer gpt-6-luna.",
+          );
+      } else if (settings.mode === "opencode") {
+        this.runtime = new OpenCodeRuntime();
+        this.state.runtime = await this.runtime.initialize();
+        if (!this.state.runtime.authenticated)
+          throw new Error(
+            "OpenCode authentication is required. Run opencode auth login first.",
           );
       }
       this.game = new AgentGame({
@@ -560,7 +568,7 @@ export class Arena {
         }, 90_000);
         await this.runtime!.turn(
           player.threadId!,
-          `Use this current state and map. Assess affordable construction or upgrades alongside expansion and defense. Attacks do not block building; an act batch can combine one attack with one build or upgrade. Choose useful actions: ${text}`,
+          `Use this current state and map. The offense summary shows legal attacks, landings, and affordable missiles alongside construction options; weigh them against expansion and defense, keeping in mind that idle economy tends to lose ground to expanding rivals. Choose useful actions: ${text}`,
           frames,
         );
       }

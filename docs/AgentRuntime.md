@@ -1,4 +1,41 @@
-# Local Codex runtime
+# Local model runtimes
+
+Agents play through either the Codex runtime or the OpenCode runtime.
+The lobby provider selector chooses per match. Scripted mode stays for
+deterministic verification only.
+
+## OpenCode runtime
+
+The runtime shells out to the user's own `opencode` binary, so any model
+already configured there can play. The default is Muse Spark 1.3 Free
+(`opencode/muse-spark-1-3-contributor-free`) at medium reasoning
+(`--variant medium`). Set `OPENFRONT_OPENCODE_MODEL` to `provider/model`
+to pin another model and `OPENFRONT_OPENCODE_VARIANT` for another effort.
+Set `OPENFRONT_OPENCODE_EXECUTABLE` to an explicit binary path
+(a `.mjs` fake works for offline tests).
+
+Each decision sends the player's own instructions plus the live snapshot and
+asks for a single JSON action object (`note`, `intent`/`intents`,
+`attackRatio`, `nextDecisionSeconds`). No harness strategy coaching is
+added; the only extra lines are the machine-readable reply envelope the
+parser needs. The runtime executes the returned think/act calls through
+the arena bridge, so the one-structure-build limit and the two-action
+budget apply to OpenCode players too. Map images from the current decision
+are attached with `--file`. Sessions continue with `--session` when the
+CLI reports one; every decision already carries the full snapshot, so a
+lost session degrades to stateless play.
+
+`OpenCodeRuntime` exports `initialize()`, `createPlayer()`, `turn()`,
+`interrupt()`, `compact()`, `history()`, and `close()` with the same
+shape the arena uses for Codex. Token accounting stays with Codex;
+OpenCode usage is billed through the user's own opencode setup.
+
+Run `node node_modules/tsx/dist/cli.mjs tests/agents/opencode-e2e.ts`
+for the offline contract check. It uses a fake binary, so it makes no
+inference request. Its artifact records the parsed calls under
+`.agent-arena/opencode-e2e.json`.
+
+## Local Codex runtime
 
 The runtime uses Codex CLI 0.158.0 and the existing ChatGPT login. It does not parse credentials or use an API key.
 
