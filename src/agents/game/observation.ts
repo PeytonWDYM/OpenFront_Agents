@@ -52,6 +52,7 @@ export class ObservationBuilder {
     query: ObserveQuery,
     events: AgentEvent[],
     attackRatio = 0.2,
+    buildStreak = 0,
   ): AgentObservation {
     const game = this.game;
     const point = (tile: number) => ({
@@ -131,7 +132,12 @@ export class ObservationBuilder {
         if (game.ownerID(neighbor) !== player.smallID()) boundary.add(neighbor);
       }
     }
-    const borders = [...boundary].slice(0, 12).map((tile) => ({
+    // Prefer actionable land borders over water so agents and the offense
+    // summary see expansion targets instead of unreachable sea tiles.
+    const boundaryTiles = [...boundary].sort(
+      (a, b) => Number(game.isLand(b)) - Number(game.isLand(a)),
+    );
+    const borders = boundaryTiles.slice(0, 12).map((tile) => ({
       ...point(tile),
       ownerId: ownerId(tile),
       canAttack: player.canAttack(tile),
@@ -268,6 +274,39 @@ export class ObservationBuilder {
       gameId: "",
       tick: game.ticks(),
       spawnPhase: game.inSpawnPhase(),
+      offense: {
+        attackableBorders: borders.filter((border) => border.canAttack).length,
+        rivalBorders: visibleRivals.filter((rival) =>
+          sharedBorders.has(rival.smallID()),
+        ).length,
+        readySilos: player
+          .units(UnitType.MissileSilo)
+          .filter(
+            (silo) =>
+              silo.isActive() &&
+              !silo.isInCooldown() &&
+              !silo.isUnderConstruction(),
+          ).length,
+        affordableMissiles: (
+          [UnitType.AtomBomb, UnitType.HydrogenBomb, UnitType.MIRV] as const
+        ).filter(
+          (type) =>
+            player
+              .units(UnitType.MissileSilo)
+              .some(
+                (silo) =>
+                  silo.isActive() &&
+                  !silo.isInCooldown() &&
+                  !silo.isUnderConstruction(),
+              ) &&
+            Number(game.config().unitInfo(type).cost(game, player)) <=
+              Number(player.gold()),
+        ),
+        structureCounts: Object.fromEntries(
+          Structures.types.map((type) => [type, player.units(type).length]),
+        ),
+        buildStreak,
+      },
       self: {
         id,
         playerId: player.id(),

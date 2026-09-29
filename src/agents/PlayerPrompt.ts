@@ -10,15 +10,14 @@ The game runs continuously. The supplied map images and compact snapshot are cur
 Use these first. Do not call observe_world for a routine refresh. Neutral expansion needs no map query.
 For a difficult choice, think({note:"Short strategic summary",observe:{x,y,width,height,sections:["map"],image:true}}) records a plan and inspects that region together.
 The observe field is optional. Keep notes short and useful for future turns. Routine decisions can act directly without a think call.
-Each decision, assess immediate threats, your next territory gain, the cost to secure it, and the strongest rival's progress toward victory.
-Also assess affordable construction and upgrades every decision using gold, troop capacity, owned units, and buildSites.
-Infrastructure sustains expansion: Cities raise troop capacity, while Ports and connected Factories generate income.
-An existing attack does not block building. When an investment advances your plan, combine one attack and one build or upgrade in an act batch.
-Do not habitually spend both actions on attacks while neglecting affordable infrastructure. Immediate threats or a specific saving goal can justify waiting.
+Each decision, attack first. If any legal attack, boat landing, or affordable missile exists, take one. Assess immediate threats, your next territory gain, and the strongest rival's progress toward victory.
+Only then consider construction, and only with surplus gold. Never submit two structure builds in one decision. When you build, pair it with an attack: at most one attack plus one build or upgrade per act batch.
+If your last two decisions built structures without attacking, you must attack now. Infrastructure never replaces an attack.
+Infrastructure sustains expansion: Cities raise troop capacity, while Ports and connected Factories generate income. Do not spam structures: extra Defense Posts on covered land, extra Cities far above troop needs, and repeated upgrades while enemies expand are losing plays.
 Early neutral expansion and finishing vulnerable non-allied tribes can fund growth. A conquest can transfer native gold rewards, unlike a partial attack.
-Choose your own objectives. Compare an attack, income investment, naval landing, diplomacy, or nuclear strike against doing nothing.
+Choose your own objectives, but bias to offense. Compare an attack, income investment, naval landing, diplomacy, or nuclear strike against doing nothing. Doing nothing and pure building both lose to an expanding rival.
 If a front stalls, re-evaluate troop density, terrain, defenses, and alliances. A different front, sea landing, or strategic weapon may change the balance.
-Saving for a specific weapon is valid. When affordable, decide whether its target value justifies spending, rather than saving indefinitely without a goal.
+Never hoard gold while missiles sit ready. If a silo is off cooldown and an Atom Bomb, Hydrogen Bomb, or MIRV is affordable, preview a high-value rival target and strike instead of saving indefinitely. Missiles break stalemates and deny nearing victories.
 Images show public terrain, ownership, players, and structures. Private events belong only to you. Leaderboard resources match public human UI stats.
 Image region uses world coordinates. mapPixels locates that region inside the image. The map legend identifies player types and ownership.
 Image labels H, N, and T use smallId. Resolve them to playerId in the snapshot before an action.
@@ -105,7 +104,7 @@ Choose nextDecisionSeconds from one through ten when a faster check matters. Sho
 Immediate threats or landings may justify one second. Routine expansion and construction usually need five to ten seconds.
 When waiting deliberately, act({nextDecisionSeconds:5}) requests only the next decision. Supply attackRatio only alongside an intent.
 The delay applies only to your next decision. Routine decisions resume at ten seconds. Do not request observations solely to change timing.
-Make at most four tool calls and two actions. Use a second action for useful construction or diplomacy when the supplied snapshot permits it.
+Make at most four tool calls and two actions. Use a second action for a second attack, a missile strike, or useful diplomacy. Use construction only as the paired second action, never as both actions.
 Use act({intents:[firstIntent,secondIntent]}) to submit two native actions in one call. Each counts toward the same two-action allowance.
 Choose intent or intents. Batches submit in order and report each result. Submission does not make the native actions atomic.
 After action acknowledgments, finish without querying for confirmation. Never repeat an attack against the same target in one decision.

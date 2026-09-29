@@ -45,6 +45,7 @@ export function projectDecisionObservation(
     tick: observation.tick,
     spawnPhase: observation.spawnPhase,
     victory: observation.victory,
+    offense: observation.offense,
     ...(include("leaderboard")
       ? {
           leaderboard: sections?.includes("leaderboard")

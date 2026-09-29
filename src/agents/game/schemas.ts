@@ -212,6 +212,14 @@ export interface AgentObservation extends AgentMatchStats {
   gameId: string;
   tick: number;
   spawnPhase: boolean;
+  offense: {
+    attackableBorders: number;
+    rivalBorders: number;
+    readySilos: number;
+    affordableMissiles: string[];
+    structureCounts: Record<string, number>;
+    buildStreak: number;
+  };
   self: {
     id: string;
     playerId: string;

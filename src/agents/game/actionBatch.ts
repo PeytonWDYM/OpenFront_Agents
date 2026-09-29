@@ -1,4 +1,5 @@
 import type { AgentGame } from "./AgentGame";
+import { isStructureBuild } from "./AgentGame";
 import { type AgentAction, AgentToolInputSchema } from "./schemas";
 
 type ActionResult = Awaited<ReturnType<AgentGame["act"]>>;
@@ -16,6 +17,7 @@ export class ActionLimitError extends Error {
 /** Share one native-action budget across single and batch calls in a decision. */
 export class ActionDecision {
   private actions = 0;
+  private structures = 0;
 
   async submit(
     input: unknown,
@@ -26,7 +28,18 @@ export class ActionDecision {
     const request = AgentToolInputSchema.parse(input);
     const intents = request.intents ?? (request.intent ? [request.intent] : []);
     if (this.actions + intents.length > 2) throw new ActionLimitError();
+    // Break structure-spam loops: at most one economy/defense build per
+    // decision. Pair it with an attack or weapon instead of double-building.
+    const priorStructures = this.structures;
+    const newStructures = intents.filter((intent) =>
+      isStructureBuild(intent),
+    ).length;
+    if (priorStructures + newStructures > 1)
+      throw new Error(
+        "Only one structure build or upgrade per decision. Pair it with an attack, landing, or missile strike instead of building twice.",
+      );
     this.actions += intents.length;
+    this.structures += newStructures;
     if (request.nextDecisionSeconds !== undefined)
       schedule(request.nextDecisionSeconds);
     if (request.intent) return submit(request.intent, request.attackRatio);

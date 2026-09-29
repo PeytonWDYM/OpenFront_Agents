@@ -10,7 +10,7 @@ export interface ArenaSettings {
   agentCount: number;
   tribeCount: number;
   nationCount: number;
-  mode: "codex" | "scripted";
+  mode: "codex" | "opencode" | "scripted";
 }
 
 export interface ArenaJoin {

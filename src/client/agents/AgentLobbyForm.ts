@@ -23,12 +23,13 @@ export function agentLobbyForm(
       (event.submitter as HTMLButtonElement).value === "spectate"
         ? "spectate"
         : "play";
+    const mode = values.get("mode") === "opencode" ? "opencode" : "codex";
     create(
       {
         agentCount: Number(values.get("agentCount")),
         tribeCount: Number(values.get("tribeCount")),
         nationCount: Number(values.get("nationCount")),
-        mode: "codex",
+        mode,
       },
       role,
     );
@@ -93,6 +94,17 @@ export function agentLobbyForm(
           @input=${updateCount}
         />
         <p class="muted">${translateText("agents.model")}</p>
+        <label>
+          ${translateText("agents.provider_label")}
+          <select name="mode" .value=${settings.mode}>
+            <option value="codex" ?selected=${settings.mode !== "opencode"}>
+              ${translateText("agents.provider_codex")}
+            </option>
+            <option value="opencode" ?selected=${settings.mode === "opencode"}>
+              ${translateText("agents.provider_opencode")}
+            </option>
+          </select>
+        </label>
         <div class="role-buttons">
           <button class="primary" type="submit" value="play">
             ${translateText("agents.play")}
