@@ -53,6 +53,7 @@ For example, `act({nextDecisionSeconds: 2})` schedules an earlier check without 
 The agent can also include this field with a normal intent. The last request in that turn wins.
 Each later turn returns to the 10-second default unless the agent requests another delay.
 Agents continue until you pause or stop them, the match ends, or the subscription reports a limit.
+OpenCode matches run fewer concurrent turns and allow four minutes per decision, with two automatic retries on pool throttles, because the free pool answers slower than Codex.
 Each decision includes live overview and tactical map images with a small numeric snapshot.
 Agents play to attack: every decision snapshot carries an `offense` summary with attackable borders, rival borders, ready silos, affordable missiles, structure counts, and the consecutive-build streak.
 The prompt requires an attack, landing, or missile strike whenever one is legal, caps each decision at one structure build paired with offense, and orders a strike instead of hoarding gold while silos sit ready.

@@ -73,6 +73,11 @@ export function parseActionOutput(
   return note ? { note, action: action.data } : { action: action.data };
 }
 
+/** The free pool throttles instead of failing: retry these, fail on the rest. */
+export function isTransientRunError(message: string): boolean {
+  return /rate|limit|429|overloaded|temporar|busy|try again/i.test(message);
+}
+
 /** Best-effort session and text recovery from `opencode run --format json`. */
 export function parseRunEvents(stdout: string): {
   text: string;

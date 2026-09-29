@@ -3,7 +3,11 @@ import { appendFile, mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { currentModel, currentVariant, executable } from "./config";
-import { parseActionOutput, parseRunEvents } from "./output";
+import {
+  isTransientRunError,
+  parseActionOutput,
+  parseRunEvents,
+} from "./output";
 
 export type GameTool = {
   name: string;
@@ -31,7 +35,10 @@ type ActiveTurn = {
   reject: (error: Error) => void;
 };
 
-const TURN_TIMEOUT_MS = 90_000;
+/** Per-turn ceiling for the free pool: slower than Codex, so wait longer. */
+export const OPENCODE_TURN_TIMEOUT_MS = 240_000;
+const TRANSIENT_RETRIES = 2;
+const TRANSIENT_WAIT_MS = 15_000;
 
 /** OpenCode-backed turns over `opencode run --format json`.
  *
@@ -239,15 +246,30 @@ export class OpenCodeRuntime {
         "--file",
         isAbsolute(image.path) ? image.path : resolve(image.path),
       );
-    let stdout: string;
-    try {
-      stdout = await this.spawnRun(args, active);
-    } catch (error) {
-      this.emit(threadId, {
-        type: "error",
-        message: error instanceof Error ? error.message : String(error),
-      });
-      throw error;
+    let stdout: string | undefined;
+    for (let attempt = 0; ; attempt++) {
+      try {
+        stdout = await this.spawnRun(args, active);
+        break;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (attempt < TRANSIENT_RETRIES && isTransientRunError(message)) {
+          this.emit(threadId, {
+            type: "retry",
+            attempt: attempt + 1,
+            message: message.slice(0, 300),
+          });
+          await new Promise((resolve) =>
+            setTimeout(resolve, TRANSIENT_WAIT_MS),
+          );
+          continue;
+        }
+        this.emit(threadId, {
+          type: "error",
+          message,
+        });
+        throw error;
+      }
     }
     const parsed = parseRunEvents(stdout);
     if (parsed.sessionId) player.sessionId = parsed.sessionId;
@@ -283,8 +305,8 @@ export class OpenCodeRuntime {
       let stderr = "";
       const timer = setTimeout(() => {
         child.kill("SIGTERM");
-        reject(new Error("OpenCode turn exceeded its 90-second limit."));
-      }, TURN_TIMEOUT_MS);
+        reject(new Error("OpenCode turn exceeded its four-minute ceiling."));
+      }, OPENCODE_TURN_TIMEOUT_MS);
       child.stdout?.on("data", (chunk: Buffer) => {
         stdout += chunk.toString("utf8");
       });

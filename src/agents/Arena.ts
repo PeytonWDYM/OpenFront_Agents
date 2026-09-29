@@ -15,7 +15,7 @@ import {
   ObserveQuerySchema,
   quickChatKeys,
 } from "./game/schemas";
-import { OpenCodeRuntime } from "./opencode/index";
+import { OPENCODE_TURN_TIMEOUT_MS, OpenCodeRuntime } from "./opencode/index";
 import { playerPrompt } from "./PlayerPrompt";
 import { scriptedAction } from "./ScriptedPlayer";
 import { ArenaSettingsSchema, defaultSettings } from "./Settings";
@@ -196,8 +196,12 @@ export class Arena {
           this.logs.add(player.id, "thread", player.threadId);
         }
       }
+      // The free pool answers slower than Codex, so OpenCode matches run
+      // fewer concurrent turns to stay under its dynamic limits.
       this.queue = new TurnQueue(
-        Math.ceil(settings.agentCount / 4),
+        Math.ceil(
+          settings.agentCount / (settings.mode === "opencode" ? 10 : 4),
+        ),
         (id) =>
           this.state.phase === "running" &&
           this.player(id).alive &&
@@ -557,15 +561,20 @@ export class Arena {
             mapPixels: frame.mapPixels,
           })),
         });
-        timeout = setTimeout(() => {
-          this.halted.add(id);
-          this.logs.add(
-            id,
-            "limit",
-            "The decision time limit ended this turn.",
-          );
-          void this.runtime!.interrupt(player.threadId!).catch(() => {});
-        }, 90_000);
+        timeout = setTimeout(
+          () => {
+            this.halted.add(id);
+            this.logs.add(
+              id,
+              "limit",
+              "The decision time limit ended this turn.",
+            );
+            void this.runtime!.interrupt(player.threadId!).catch(() => {});
+          },
+          this.state.settings.mode === "opencode"
+            ? OPENCODE_TURN_TIMEOUT_MS
+            : 90_000,
+        );
         await this.runtime!.turn(
           player.threadId!,
           `Use this current state and map. The offense summary shows legal attacks, landings, and affordable missiles alongside construction options; weigh them against expansion and defense, keeping in mind that idle economy tends to lose ground to expanding rivals. Choose useful actions: ${text}`,
