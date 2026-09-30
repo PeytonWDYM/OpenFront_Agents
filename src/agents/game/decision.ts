@@ -46,6 +46,8 @@ export function projectDecisionObservation(
       index < 6 ||
       rival.allied ||
       rival.sharesBorder ||
+      rival.canCounterAttack ||
+      rival.boatTarget !== undefined ||
       relevantIds.has(rival.playerId),
   );
   return {
@@ -128,9 +130,13 @@ export function projectDecisionObservation(
               ? { allied: true, allianceExpiresAt: rival.allianceExpiresAt }
               : {}),
             ...(rival.sharesBorder ? { sharesBorder: true } : {}),
+            ...(rival.canReinforceAttack ? { canReinforceAttack: true } : {}),
+            ...(rival.canCounterAttack ? { canCounterAttack: true } : {}),
+            ...(rival.boatTarget ? { boatTarget: rival.boatTarget } : {}),
             ...(rival.embargoed ? { embargoed: true } : {}),
             availableActions: [
               ...(rival.canAttack ? ["attack"] : []),
+              ...(rival.boatTarget ? ["boat"] : []),
               ...(rival.canRequestAlliance ? ["allianceRequest"] : []),
               ...(rival.canSendQuickChat ? ["quick_chat"] : []),
               ...(rival.canSendEmoji ? ["emoji"] : []),

@@ -8,6 +8,11 @@ import {
   Structures,
   UnitType,
 } from "../../core/game/Game";
+import {
+  boatAttackTargets,
+  canCounterAttack,
+  landAttackBorders,
+} from "./attackReachability";
 import { requestedBuildSites } from "./buildSites";
 import { selectAgentEvents } from "./events";
 import { MatchStats } from "./matchStats";
@@ -102,11 +107,8 @@ export class ObservationBuilder {
       game.hasOwner(reference)
     )
       relevant.add(game.owner(reference).id());
-    const sharedBorders = new Set<number>();
-    for (const tile of player.borderTiles()) {
-      for (const neighbor of game.neighbors(tile))
-        sharedBorders.add(game.ownerID(neighbor));
-    }
+    const landBorders = landAttackBorders(game, player);
+    const sharedBorders = new Set(landBorders.keys());
     const priority = (rival: Player) =>
       relevant.has(rival.id()) ? 0 : sharedBorders.has(rival.smallID()) ? 1 : 2;
     const rivals = game
@@ -129,22 +131,32 @@ export class ObservationBuilder {
       sampleBorders.push(tile);
       if (sampleBorders.length >= 48) break;
     }
-    const boundary = new Set<number>();
-    for (const tile of sampleBorders) {
-      for (const neighbor of game.neighbors(tile)) {
-        if (game.ownerID(neighbor) !== player.smallID()) boundary.add(neighbor);
-      }
-    }
-    // Prefer actionable land borders over water so agents and the offense
-    // summary see expansion targets instead of unreachable sea tiles.
-    const boundaryTiles = [...boundary].sort(
-      (a, b) => Number(game.isLand(b)) - Number(game.isLand(a)),
-    );
-    const borders = boundaryTiles.slice(0, 12).map((tile) => ({
-      ...point(tile),
-      ownerId: ownerId(tile),
-      canAttack: player.canAttack(tile),
-    }));
+    const canAttackOwner = (tile: number) => {
+      const owner = game.owner(tile);
+      return !owner.isPlayer() || player.canAttackPlayer(owner);
+    };
+    // Preserve neutral expansion, then prefer a border per rival within the hint cap.
+    const boundaryTiles = [...landBorders.values()].flatMap((tiles) => [
+      ...tiles,
+    ]);
+    const neutralBorder = landBorders
+      .get(game.terraNullius().smallID())
+      ?.values()
+      .next().value;
+    const representatives = [
+      ...(neutralBorder === undefined ? [] : [neutralBorder]),
+      ...visibleRivals.flatMap((rival) => {
+        const tile = landBorders.get(rival.smallID())?.values().next().value;
+        return tile === undefined ? [] : [tile];
+      }),
+    ];
+    const borders = [...new Set([...representatives, ...boundaryTiles])]
+      .slice(0, 12)
+      .map((tile) => ({
+        ...point(tile),
+        ownerId: ownerId(tile),
+        canAttack: canAttackOwner(tile),
+      }));
     const buildSamples = [...sampleBorders.slice(0, 4)];
     if (spawn !== undefined) buildSamples.unshift(spawn);
     if (query.x !== undefined && query.y !== undefined)
@@ -258,44 +270,28 @@ export class ObservationBuilder {
         }
       }
     }
-    const boatTargets: AgentObservation["map"]["boatTargets"] = [];
-    if (
-      !game.inSpawnPhase() &&
-      player.hasSpawned() &&
-      !game.config().isUnitDisabled(UnitType.TransportShip)
-    ) {
-      const coasts = this.coastalCandidates
-        .filter((tile) => ownerId(tile) !== player.id())
-        .sort(
-          (a, b) =>
-            game.euclideanDistSquared(reference, a) -
-            game.euclideanDistSquared(reference, b),
-        )
-        .slice(0, 24);
-      const targets = [
-        ...cells.map((cell) => cell.tile),
-        ...coasts,
-        ...visibleRivals
-          .map((rival) => rival.spawnTile())
-          .filter((tile): tile is number => tile !== undefined),
-      ];
-      for (const tile of [...new Set(targets)].slice(0, 40)) {
-        if (
-          ownerId(tile) === player.id() ||
-          !game.isLand(tile) ||
-          game.isImpassable(tile)
-        )
-          continue;
-        const launchTile = player.canBuild(UnitType.TransportShip, tile);
-        if (launchTile !== false)
-          boatTargets.push({
-            ...point(tile),
-            ownerId: ownerId(tile),
-            launchTile,
-          });
-        if (boatTargets.length >= 4) break;
-      }
-    }
+    const focusedOwner =
+      query.x !== undefined && query.y !== undefined
+        ? game.owner(reference)
+        : undefined;
+    const boatRivals = [...visibleRivals].sort(
+      (a, b) =>
+        Number(b === focusedOwner) - Number(a === focusedOwner) ||
+        Number(sharedBorders.has(a.smallID())) -
+          Number(sharedBorders.has(b.smallID())),
+    );
+    const boatTargets = boatAttackTargets(
+      game,
+      player,
+      boatRivals,
+      reference,
+      this.coastalCandidates,
+      cells.map((cell) => cell.tile),
+    ).map((landing) => ({
+      ...point(landing.tile),
+      ownerId: ownerId(landing.tile),
+      launchTile: landing.launchTile,
+    }));
     return {
       ...this.stats.observe(player),
       gameId: "",
@@ -303,8 +299,8 @@ export class ObservationBuilder {
       spawnPhase: game.inSpawnPhase(),
       militaryIntel: militaryIntel(game, player),
       offense: {
-        attackableBorders: borders.filter((border) => border.canAttack).length,
-        rivalBorders: visibleRivals.filter((rival) =>
+        attackableBorders: boundaryTiles.filter(canAttackOwner).length,
+        rivalBorders: rivals.filter((rival) =>
           sharedBorders.has(rival.smallID()),
         ).length,
         readySilos: player
@@ -380,44 +376,72 @@ export class ObservationBuilder {
           regionalUnits ? withinRegion : undefined,
         ),
       },
-      rivals: visibleRivals.map((rival) => ({
-        playerId: rival.id(),
-        playerType: rival.type(),
-        smallId: rival.smallID(),
-        ...(rival.spawnTile() === undefined
-          ? {}
-          : { position: point(rival.spawnTile()!) }),
-        name: rival.name(),
-        alive: rival.isAlive(),
-        tiles: rival.numTilesOwned(),
-        troops: Math.floor(rival.troops()),
-        gold: Number(rival.gold()),
-        maxTroops: Math.floor(game.config().maxTroops(rival)),
-        allied: player.isAlliedWith(rival),
-        sharesBorder: sharedBorders.has(rival.smallID()),
-        canAttack:
-          sharedBorders.has(rival.smallID()) && player.canAttackPlayer(rival),
-        canRequestAlliance: player.canSendAllianceRequest(rival),
-        canSendQuickChat: player.canSendQuickChat(rival),
-        canSendEmoji: player.canSendEmoji(rival),
-        communication: {
-          quickChatResponse: rival.type() === PlayerType.Human,
-          emojiResponse:
-            rival.type() === PlayerType.Human ||
-            rival.type() === PlayerType.Nation,
-          allianceResponse:
-            rival.type() === PlayerType.Human
-              ? "player"
-              : rival.type() === PlayerType.Bot
-                ? "automatic"
-                : "conditional",
-        },
-        embargoed: player.hasEmbargoAgainst(rival),
-        allianceExpiresAt: player.allianceInfo(rival)?.expiresAt,
-        canExtendAlliance: player.allianceInfo(rival)?.canExtend ?? false,
-        canDonateGold: player.canDonateGold(rival),
-        canDonateTroops: player.canDonateTroops(rival),
-      })),
+      rivals: visibleRivals.map((rival) => {
+        const boatTarget = boatTargets.find(
+          (target) => target.ownerId === rival.id(),
+        );
+        const attackPermission = player.canAttackPlayer(rival);
+        const sharesBorder = sharedBorders.has(rival.smallID());
+        const counterAttack =
+          attackPermission && canCounterAttack(player, rival);
+        return {
+          playerId: rival.id(),
+          playerType: rival.type(),
+          smallId: rival.smallID(),
+          ...(rival.spawnTile() === undefined
+            ? {}
+            : { position: point(rival.spawnTile()!) }),
+          name: rival.name(),
+          alive: rival.isAlive(),
+          tiles: rival.numTilesOwned(),
+          troops: Math.floor(rival.troops()),
+          gold: Number(rival.gold()),
+          maxTroops: Math.floor(game.config().maxTroops(rival)),
+          allied: player.isAlliedWith(rival),
+          sharesBorder,
+          canAttack: attackPermission && (sharesBorder || counterAttack),
+          canReinforceAttack:
+            sharesBorder &&
+            attackPermission &&
+            player
+              .outgoingAttacks()
+              .some(
+                (attack) =>
+                  attack.target() === rival &&
+                  attack.isActive() &&
+                  attack.troops() > 0,
+              ),
+          canCounterAttack: counterAttack,
+          ...(boatTarget
+            ? {
+                boatTarget: {
+                  tile: boatTarget.tile,
+                  launchTile: boatTarget.launchTile,
+                },
+              }
+            : {}),
+          canRequestAlliance: player.canSendAllianceRequest(rival),
+          canSendQuickChat: player.canSendQuickChat(rival),
+          canSendEmoji: player.canSendEmoji(rival),
+          communication: {
+            quickChatResponse: rival.type() === PlayerType.Human,
+            emojiResponse:
+              rival.type() === PlayerType.Human ||
+              rival.type() === PlayerType.Nation,
+            allianceResponse:
+              rival.type() === PlayerType.Human
+                ? "player"
+                : rival.type() === PlayerType.Bot
+                  ? "automatic"
+                  : "conditional",
+          },
+          embargoed: player.hasEmbargoAgainst(rival),
+          allianceExpiresAt: player.allianceInfo(rival)?.expiresAt,
+          canExtendAlliance: player.allianceInfo(rival)?.canExtend ?? false,
+          canDonateGold: player.canDonateGold(rival),
+          canDonateTroops: player.canDonateTroops(rival),
+        };
+      }),
       map: {
         width: game.width(),
         height: game.height(),

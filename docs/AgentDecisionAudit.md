@@ -156,3 +156,37 @@ The freeze step saves source hashes, match settings, and exact public inputs in 
 This optional probe consumes model usage. The native batch and military tests do not.
 
 Changes require a sidecar reload and new player threads. Existing match threads retain their original instructions.
+
+## River crossings: land commands without a land front
+
+This review covers all 25 agent logs in game `a1rgtRWYii` through September 30, 2026, 12:10:04.758 UTC.
+The local evidence is `.agent-arena/audits/river-attack-review.json` in the serving checkout.
+It counts 1,079 rival attack submissions and 62 boat submissions. Sixteen agents submitted no boats.
+For 294 attacks, the target appeared in the preceding decision snapshot without `attack` in its `availableActions`.
+Snapshots precede submission and the map changes during inference. This count does not prove 294 invalid executions.
+
+Agent 11 provides a concrete example. It repeatedly attacked Croatian Fief across a narrow river and submitted no boats.
+At snapshot ticks 3122, 3358, and 3880, that rival had no land attack action and the agent had no outgoing attacks.
+The sampled boundary at x2493 was water. A boat destination at x2496, y845 belonged to Croatian Fief.
+Each snapshot supplied that destination and an owned launch shore. The agent still submitted land attacks at ticks 3187, 3433, and 3953.
+At tick 4101, an adjacent enemy land tile appeared and `attack` became available. That later land command had a real front.
+
+The action tool previously checked neither attack reachability nor transport legality before returning `submitted`.
+Native land execution can create an empty attack, then retreat without crossing water.
+The existing prompt mentioned a reachable border but did not clearly distinguish a river neighbor from a land front.
+The fix rejects known no-ops before submission and derives land fronts from every owned border, excluding water and impassable targets.
+The border summary counts the full front. Its bounded tile hints no longer depend on the first 48 owned border entries.
+One reachable neutral expansion hint remains visible when many neighboring rivals would otherwise fill the twelve-tile sample.
+Rivals can supply `boatTarget` with a native landing tile and launch shore. The compact snapshot retains these rivals and advertises `boat`.
+The prompt distinguishes land fronts from river neighbors and identifies the destination separately from the launch shore.
+Transport hints remain samples. A missing hint does not prove that every possible landing is unavailable.
+
+Native boat execution establishes a beachhead, after which ordinary land attacks can reinforce it.
+An outgoing attack alone does not prove access. Without a frontier, a new land command can absorb that attack and immediately retreat.
+The guard also preserves native counterattacks against existing incoming troops, even when the land frontier has disappeared.
+These commands offset committed enemy troops. They do not establish a crossing.
+
+The focused native simulation test covers eight failure cases and records actual boat arrival, landing conquest, reinforcement, and counterattack outcomes.
+Run `tsx tests/agents/river-reachability-e2e.ts` to produce `.agent-arena/river-reachability-e2e.json` with zero model requests.
+No game rules, action quotas, forced crossings, or combat mechanics change.
+The running match retains its current sidecar and instructions until a later reload. This pass does not restart it.
