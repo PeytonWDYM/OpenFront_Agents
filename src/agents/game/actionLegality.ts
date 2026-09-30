@@ -1,4 +1,9 @@
 import { Game, Player, UnitType } from "../../core/game/Game";
+import {
+  canCounterAttack,
+  landAttackBorders,
+  transportLanding,
+} from "./attackReachability";
 import type { AgentAction } from "./schemas";
 
 /** Reject known native control no-ops using current ownership and native permissions. */
@@ -8,6 +13,55 @@ export function assertAgentAction(
   intent: AgentAction,
 ): void {
   switch (intent.type) {
+    case "attack": {
+      if (intent.targetID !== null && !game.hasPlayer(intent.targetID))
+        throw new Error(`Attack target ${intent.targetID} does not exist.`);
+      const target =
+        intent.targetID === null
+          ? game.terraNullius()
+          : game.player(intent.targetID);
+      if (target === player)
+        throw new Error("You cannot attack your own player.");
+      if (target.isPlayer() && !target.isAlive())
+        throw new Error("The attack target is no longer alive.");
+      if (target.isPlayer() && !player.canAttackPlayer(target))
+        throw new Error(
+          "Native attack permission blocks this target: friendly, allied, or spawn immune.",
+        );
+      if (
+        !landAttackBorders(game, player).has(target.smallID()) &&
+        !canCounterAttack(player, target)
+      )
+        throw new Error(
+          "No passable land border with this target. Water does not form a land attack border. Use a legal boat landing, establish a beachhead, or choose another target.",
+        );
+      return;
+    }
+    case "boat": {
+      if (!game.isValidRef(intent.dst))
+        throw new Error("A boat requires a valid destination tile.");
+      const target = game.owner(intent.dst);
+      if (target === player)
+        throw new Error("A boat cannot attack your own land.");
+      if (target.isPlayer() && !player.canAttackPlayer(target))
+        throw new Error(
+          "Native attack permission blocks this boat target: friendly, allied, or spawn immune.",
+        );
+      if (game.config().isUnitDisabled(UnitType.TransportShip))
+        throw new Error("Transport ships are disabled in this match.");
+      if (
+        player.unitCount(UnitType.TransportShip) >=
+        game.config().boatMaxNumber()
+      )
+        throw new Error(
+          "The native transport limit is reached. Wait for a transport to arrive or retreat.",
+        );
+      if (!transportLanding(game, player, intent.dst))
+        throw new Error(
+          "No native legal boat landing and launch for this destination. A boat needs an owned coast and a reachable target coast on connected water.",
+        );
+      return;
+    }
     case "cancel_attack":
       if (
         !player

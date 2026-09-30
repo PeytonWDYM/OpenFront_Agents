@@ -271,6 +271,9 @@ export interface AgentObservation extends AgentMatchStats {
     allied: boolean;
     sharesBorder: boolean;
     canAttack: boolean;
+    canReinforceAttack: boolean;
+    canCounterAttack: boolean;
+    boatTarget?: { tile: number; launchTile: number };
     canRequestAlliance: boolean;
     canSendQuickChat: boolean;
     canSendEmoji: boolean;

@@ -29,7 +29,7 @@ Extra checks consume tokens without shortening inference, construction, or troop
 
 STATE AND MAPS
 Match settings override defaults. victory gives the target, with percentages on 0..100. Standard FFA needs more than 80% of non-fallout land, independently of allies.
-Rivals give public troops, gold, capacity, borders, and availableActions. offense and legal sites are sampled options. underConstruction marks unfinished assets.
+Rivals give public troops, gold, capacity, borders, and availableActions. offense.attackableBorders counts currently attackable adjacent tiles. Tile hints and legal sites are samples. underConstruction marks unfinished assets.
 decisionFeedback reports income, resource changes, commitments, construction, and trade captures. Net changes include spending and regeneration. Income trails 120 seconds and can outlast lost infrastructure.
 Action observation labels describe matching state, not per-action execution or failure. Assets can execute and disappear between decisions.
 Use native playerId, tile, and unitId. Seat IDs, smallIds, and image x/y are different. Image region/mapPixels give the world-coordinate transform and metadata gives exact entities.
@@ -43,7 +43,11 @@ SPAWN AND LAND
 Manual spawn is your first decision. Choose any legal tile. spawnCandidates give geographic suggestions and local facts.
 After all placements, one review turn permits up to two optional relocations. Its end confirms your latest placement. spawnReview shows stage and relocationsRemaining.
 The countdown waits for all reviews. Random spawn needs no placement action.
-attack targetID:null expands reachable neutral land. A rival targetID uses its native playerId and needs a reachable shared border.
+attack targetID:null expands reachable neutral land. A rival targetID uses its native playerId. Land conquest needs a passable shared border.
+sharesBorder means adjacent passable land. Nearby territory across a river is not a land border. A boat can establish a beachhead.
+Ordinary attacks cannot cross water. If repeated commands make no progress, check current access and outcomes before committing again.
+canCounterAttack marks a native attack that can cancel opposing incoming troops even without a land front. It does not create a crossing.
+canReinforceAttack marks a reachable active assault that another attack command can reinforce.
 An attackRatio supplied to act persists as a fraction 0..1 and overrides attack/boat troop amounts in that call. Later null attack troops use the saved ratio. Explicit troop amounts remain exact when act omits attackRatio.
 The ratio applies separately to every army action. Combined commitments can exceed available troops and reduce later native allocations.
 Troops regenerate, with peak growth near 42% of capacity. Terrain, defender density, defenses, and committed troops affect combat.
@@ -68,7 +72,9 @@ NAVAL AND NUCLEAR
 Warship build_unit needs a WATER patrol tile, completed Port, and connected water. move_warship changes an owned active ship's patrol. Native shore targets can be valid.
 Warships fight automatically, intercept transports, capture eligible nonallied trade, and repair at friendly Ports. Piracy pays at a reachable completed owned Port, not capture.
 observe_world tradeHeatmap:true shows observed density, capture eligibility, and patrols with an image. Traffic does not guarantee income. trade_ship_captured identifies your lost ship/captor. Destinations are route cues.
-boat uses a destination land tile and needs owned coastal access, not a Port. boatTargets gives legal landings. cancel_boat needs your own transport ID.
+boat uses a destination land tile and needs owned coastal access, not a Port. boatTargets gives sampled legal landings.
+An optional rival boatTarget links that rival to one sampled landing. Missing hints do not prove every possible landing is unavailable.
+Use a boatTarget's tile as the destination. Its launchTile is your embarkation shore, not the target. cancel_boat needs your own transport ID.
 delete_unit requires owned land. Ownership and native legality apply to force and structure commands.
 Nuclear build_unit uses Atom Bomb, Hydrogen Bomb, or MIRV with an enemy TARGET tile. The engine chooses the launch silo. Never supply your own land, City, or silo as the target.
 Enemy targets can still damage nearby owned infrastructure. Check ownStructuresAtRisk in previews.
