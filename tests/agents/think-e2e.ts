@@ -1,5 +1,6 @@
 // Failure cases: empty or oversized notes, unknown keys, invalid nested queries,
-// combined focus selectors, double-charged observations, foreign private resources,
+// combined focus selectors, double-charged observations, wrong public resources,
+// enemy private orders or unit state,
 // repeated events, missing images, automatic actions, and oversized tool schemas.
 import assert from "node:assert/strict";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -166,18 +167,39 @@ const focusedData = z
   .object({
     self: z.object({ playerId: z.string(), troops: z.number() }),
     target: z.object({ playerId: z.string() }),
-    rivals: z.array(z.record(z.string(), z.unknown())),
+    rivals: z.array(
+      z
+        .object({
+          playerId: z.string(),
+          troops: z.number(),
+          gold: z.number(),
+          maxTroops: z.number(),
+        })
+        .passthrough(),
+    ),
     events: z.array(z.unknown()),
   })
   .parse(focused.data);
 assert.equal(focusedData.self.playerId, self.id());
 assert.equal(focusedData.self.troops, self.troops());
 assert.equal(focusedData.target.playerId, target.id());
-assert.ok(
-  focusedData.rivals.every(
-    (rival) => !("troops" in rival) && !("gold" in rival),
-  ),
-);
+for (const rival of focusedData.rivals) {
+  const native = runner.game.player(rival.playerId);
+  assert.equal(rival.troops, Math.floor(native.troops()));
+  assert.equal(rival.gold, Number(native.gold()));
+  assert.equal(
+    rival.maxTroops,
+    Math.floor(runner.game.config().maxTroops(native)),
+  );
+  for (const privateField of [
+    "incomingAttacks",
+    "outgoingAttacks",
+    "attackRatio",
+    "units",
+    "orders",
+  ])
+    assert.ok(!(privateField in rival), `Rival ${privateField} stays private`);
+}
 assert.equal(focusedData.events.length, 1);
 assert.equal(focused.images?.length, 1);
 assert.ok(

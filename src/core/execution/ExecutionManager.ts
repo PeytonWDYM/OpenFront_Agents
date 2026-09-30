@@ -83,6 +83,7 @@ export class Executor {
           player.info(),
           intent.tile,
           true,
+          intent.confirm,
         );
       case "boat":
         return new TransportShipExecution(player, intent.dst, intent.troops);

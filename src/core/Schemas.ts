@@ -583,6 +583,7 @@ export const GameConfigSchema = z.object({
   randomSpawn: z.boolean(),
   // Agent lobbies start the spawn countdown after these seats actually spawn.
   spawnReadyClientIDs: z.array(z.string()).min(1).max(400).optional(),
+  requireSpawnConfirmation: z.boolean().optional(),
   maxPlayers: zb.uint().optional(),
   // OFM: allowlist of publicIds allowed to join (admin-only, see create_game).
   allowedPublicIds: z.array(z.string()).max(200).optional(),
@@ -682,6 +683,8 @@ export const SpawnIntentSchema = z.object({
   // A TileRef indexes the typed-array terrain buffers, so it must be a
   // non-negative integer. Fractional refs silently corrupt those lookups.
   tile: zb.uint(),
+  // Agent review confirms the current placement without changing its tile.
+  confirm: z.boolean().optional(),
 });
 
 export const BoatAttackIntentSchema = z.object({

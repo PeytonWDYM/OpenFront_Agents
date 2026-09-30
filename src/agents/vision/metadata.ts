@@ -1,5 +1,6 @@
 import { Game, Player, Structures, UnitType } from "../../core/game/Game";
 import { navalAffiliation } from "../game/naval";
+import { resolveOverlays, unitLayerVisible, VisionLayers } from "./options";
 import { Color, Region } from "./raster";
 
 export type PlayerMarker = {
@@ -13,7 +14,12 @@ export type PlayerMarker = {
 };
 
 /** Return exact public unit positions, closest to the crop center first. */
-export function publicUnitMarkers(game: Game, region: Region, self?: Player) {
+export function publicUnitMarkers(
+  game: Game,
+  region: Region,
+  self?: Player,
+  layers: VisionLayers = resolveOverlays(),
+) {
   const visible = game
     .units([
       ...Structures.types,
@@ -24,6 +30,7 @@ export function publicUnitMarkers(game: Game, region: Region, self?: Player) {
     .filter(
       (unit) =>
         unit.isActive() &&
+        unitLayerVisible(unit.type(), layers) &&
         game.x(unit.tile()) >= region.x &&
         game.x(unit.tile()) < region.x + region.width &&
         game.y(unit.tile()) >= region.y &&

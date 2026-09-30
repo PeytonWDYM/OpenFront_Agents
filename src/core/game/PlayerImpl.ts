@@ -196,6 +196,8 @@ export class PlayerImpl implements Player {
   public _alliances: MutableAlliance[] = [];
 
   private _spawnTile: TileRef | undefined;
+  private _spawnConfirmed = false;
+  private _spawnRelocations = 0;
   private _isDisconnected = false;
   private _disconnectSnapshot: DisconnectSnapshot | null = null;
 
@@ -742,7 +744,22 @@ export class PlayerImpl implements Player {
   }
 
   setSpawnTile(spawnTile: TileRef): void {
+    if (this._spawnTile !== undefined && this._spawnTile !== spawnTile)
+      this._spawnRelocations++;
     this._spawnTile = spawnTile;
+    this._spawnConfirmed = false;
+  }
+
+  hasConfirmedSpawn(): boolean {
+    return this._spawnConfirmed;
+  }
+
+  numSpawnRelocations(): number {
+    return this._spawnRelocations;
+  }
+
+  confirmSpawn(): void {
+    this._spawnConfirmed = true;
   }
 
   spawnTile(): TileRef | undefined {
@@ -2014,6 +2031,8 @@ export class PlayerImpl implements Player {
       outgoingLandAttacks: this._outgoingLandAttacks.map((a) => w.attack(a)),
       alliances: this._alliances.map((a) => w.alliance(a)),
       spawnTile: this._spawnTile ?? null,
+      spawnConfirmed: this._spawnConfirmed,
+      spawnRelocations: this._spawnRelocations,
       isDisconnected: this._isDisconnected,
       disconnectSnapshot: this._disconnectSnapshot
         ? { ...this._disconnectSnapshot }
@@ -2091,6 +2110,8 @@ export class PlayerImpl implements Player {
     this._outgoingLandAttacks = s.outgoingLandAttacks.map((i) => r.attack(i));
     this._alliances = s.alliances.map((i) => r.alliance(i));
     this._spawnTile = s.spawnTile ?? undefined;
+    this._spawnConfirmed = s.spawnConfirmed;
+    this._spawnRelocations = s.spawnRelocations;
     this._isDisconnected = s.isDisconnected;
     this._disconnectSnapshot = s.disconnectSnapshot
       ? { ...s.disconnectSnapshot }
@@ -2110,7 +2131,10 @@ export class PlayerImpl implements Player {
 
 export const PlayerSnapshot = snapshotType({
   name: "Player",
-  version: 1,
+  version: 2,
+  migrations: {
+    1: (state) => ({ ...state, spawnConfirmed: false, spawnRelocations: 0 }),
+  },
   schema: z.object({
     smallID: zInt(),
     info: PlayerInfoSchema,
@@ -2160,6 +2184,8 @@ export const PlayerSnapshot = snapshotType({
     outgoingLandAttacks: z.array(zRef()),
     alliances: z.array(zRef()),
     spawnTile: zTile().nullable(),
+    spawnConfirmed: z.boolean(),
+    spawnRelocations: zInt(),
     isDisconnected: z.boolean(),
     disconnectSnapshot: z
       .object({

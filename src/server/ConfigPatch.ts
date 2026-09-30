@@ -21,6 +21,7 @@ const COPIED_KEYS = [
   "instantBuild",
   "randomSpawn",
   "spawnReadyClientIDs",
+  "requireSpawnConfirmation",
   "gameMode",
   "disabledUnits",
   "playerTeams",

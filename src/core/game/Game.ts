@@ -632,6 +632,9 @@ export interface Player {
   disconnectedAtTick(): number | null;
 
   hasSpawned(): boolean;
+  hasConfirmedSpawn(): boolean;
+  numSpawnRelocations(): number;
+  confirmSpawn(): void;
   setSpawnTile(spawnTile: TileRef): void;
   spawnTile(): TileRef | undefined;
 

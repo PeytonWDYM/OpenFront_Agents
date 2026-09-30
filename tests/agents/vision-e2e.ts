@@ -118,7 +118,7 @@ await writeFile(
   ),
 );
 assert.deepEqual(frame.region, region);
-assert(frame.width <= 512 && frame.height <= 512);
+assert(frame.width <= 768 && frame.height <= 768);
 const png = await readFile(frame.path);
 assert.equal(png.subarray(1, 4).toString(), "PNG");
 assert.equal(png.readUInt32BE(16), frame.width);
@@ -379,7 +379,7 @@ const incorrectViewerFrame = await focusImages.renderRegion(
   nationFocus.region,
 );
 assert.deepEqual(nationFrame.region, nationFocus.region);
-assert(nationFrame.width <= 512 && nationFrame.height <= 512);
+assert(nationFrame.width <= 768 && nationFrame.height <= 768);
 assert(
   !(await readFile(nationFrame.path)).equals(
     await readFile(incorrectViewerFrame.path),
@@ -528,7 +528,7 @@ const ship = enemy.buildUnit(UnitType.Warship, missileGame.ref(78, 50), {
 const missileFrame = await new MapImages(
   "vision-missile-e2e",
 ).renderNukePreview(missileGame, launcher, preview);
-assert(missileFrame.width <= 512 && missileFrame.height <= 512);
+assert(missileFrame.width <= 768 && missileFrame.height <= 768);
 assert(missileFrame.region.x <= preview.source!.x);
 assert(
   missileFrame.region.x + missileFrame.region.width >

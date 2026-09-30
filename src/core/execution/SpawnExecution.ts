@@ -46,6 +46,7 @@ export class SpawnExecution implements Execution {
     // callers (PlayerSpawner, NationExecution) are trusted and place players
     // deliberately, including at the end of the spawn phase; a client may not.
     private fromIntent: boolean = false,
+    private confirm: boolean = false,
   ) {
     this.random = new PseudoRandom(
       simpleHash(playerInfo.id) + simpleHash(gameID),
@@ -86,6 +87,28 @@ export class SpawnExecution implements Execution {
     // rejected intent is a deterministic no-op rather than a desync.
     if (this.fromIntent && !this.queuedDuringSpawnPhase) {
       return;
+    }
+
+    if (
+      this.fromIntent &&
+      this.mg.config().gameConfig().requireSpawnConfirmation
+    ) {
+      if (player.hasConfirmedSpawn()) return;
+      const allPlaced = this.mg
+        .config()
+        .gameConfig()
+        .spawnReadyClientIDs?.every((id) =>
+          this.mg.playerByClientID(id)?.hasSpawned(),
+        );
+      if (this.confirm && player.hasSpawned()) {
+        if (allPlaced) player.confirmSpawn();
+        return;
+      }
+      if (
+        player.hasSpawned() &&
+        (!allPlaced || player.numSpawnRelocations() >= 2)
+      )
+        return;
     }
 
     // Security: If random spawn is enabled, prevent players from re-rolling their spawn location
@@ -138,6 +161,12 @@ export class SpawnExecution implements Execution {
 
   private getSpawn(center?: TileRef): Spawn | undefined {
     if (center !== undefined) {
+      if (
+        !this.mg.isLand(center) ||
+        this.mg.isImpassable(center) ||
+        this.mg.hasOwner(center)
+      )
+        return;
       const tiles = getSpawnTiles(this.mg, center, false);
 
       if (!tiles.length) {
@@ -228,6 +257,7 @@ export class SpawnExecution implements Execution {
       playerInfo: playerInfoData(this.playerInfo),
       tile: this.tile,
       fromIntent: this.fromIntent,
+      confirm: this.confirm,
     });
   }
 
@@ -239,6 +269,7 @@ export class SpawnExecution implements Execution {
     this.playerInfo = readPlayerInfo(s.playerInfo, r);
     if (s.tile !== undefined) this.tile = s.tile;
     this.fromIntent = s.fromIntent;
+    this.confirm = s.confirm;
   }
 }
 
@@ -251,12 +282,14 @@ const SpawnStateSchema = z.object({
   // Untrusted intent data, validated in tick, so any number.
   tile: zNum().optional(),
   fromIntent: z.boolean(),
+  confirm: z.boolean(),
 });
 type SpawnState = z.infer<typeof SpawnStateSchema>;
 
 export const SpawnExecutionSnapshot = execSnapshotType({
   name: "Spawn",
-  version: 1,
+  version: 2,
+  migrations: { 1: (state) => ({ ...state, confirm: false }) },
   schema: SpawnStateSchema,
   cls: () => SpawnExecution,
 });

@@ -18,7 +18,14 @@ export class SpawnTimerExecution implements Execution {
     if (requiredSeats !== undefined) {
       if (
         this.countdownStartTick === null &&
-        requiredSeats.every((id) => this.mg.playerByClientID(id)?.hasSpawned())
+        requiredSeats.every((id) => {
+          const player = this.mg.playerByClientID(id);
+          return (
+            player?.hasSpawned() &&
+            (!this.mg.config().gameConfig().requireSpawnConfirmation ||
+              player.hasConfirmedSpawn())
+          );
+        })
       ) {
         this.countdownStartTick = this.mg.ticks();
       }

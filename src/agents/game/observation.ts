@@ -1,4 +1,3 @@
-import { getSpawnTiles } from "../../core/execution/Util";
 import {
   AllPlayers,
   Game,
@@ -13,6 +12,7 @@ import { requestedBuildSites } from "./buildSites";
 import { MatchStats } from "./matchStats";
 import { publicTradeTraffic, warshipBuildSite } from "./naval";
 import { AgentEvent, AgentObservation, ObserveQuery } from "./schemas";
+import { SpawnSiteFinder } from "./spawnSites";
 
 const buildableTypes = PlayerBuildable.types.filter(
   (type) => type !== UnitType.TransportShip,
@@ -20,19 +20,13 @@ const buildableTypes = PlayerBuildable.types.filter(
 
 /** Static samples are shared by all seats. Ownership checks use the live mirror. */
 export class ObservationBuilder {
-  private candidates: number[] = [];
   private coastalCandidates: number[] = [];
   private readonly stats: MatchStats;
+  private readonly spawnSites: SpawnSiteFinder;
 
   constructor(private game: Game) {
     this.stats = new MatchStats(game);
-    for (let y = 8; y < game.height(); y += 24) {
-      for (let x = 8; x < game.width(); x += 24) {
-        const tile = game.ref(x, y);
-        if (game.isLand(tile) && !game.isImpassable(tile))
-          this.candidates.push(tile);
-      }
-    }
+    this.spawnSites = new SpawnSiteFinder(game);
     const coastalBuckets = new Set<number>();
     const columns = Math.ceil(game.width() / 24);
     for (let tile = 0; tile < game.width() * game.height(); tile++) {
@@ -68,20 +62,14 @@ export class ObservationBuilder {
     const ownerId = (tile: number) =>
       game.hasOwner(tile) ? game.owner(tile).id() : null;
     const spawn = player.spawnTile();
+    const spawnCandidates = this.spawnSites.find(player, index, query);
     const reference =
       query.x !== undefined && query.y !== undefined
         ? game.ref(
             Math.min(query.x, game.width() - 1),
             Math.min(query.y, game.height() - 1),
           )
-        : (spawn ??
-          this.candidates[
-            Math.floor(
-              (this.candidates.length * index) /
-                Math.max(1, game.allPlayers().length),
-            )
-          ] ??
-          0);
+        : (spawn ?? spawnCandidates[0]?.tile ?? 0);
     const relevant = new Set([
       ...player.incomingAttacks().map((attack) => attack.attacker().id()),
       ...player.outgoingAttacks().map((attack) => attack.target().id()),
@@ -165,7 +153,7 @@ export class ObservationBuilder {
       query.buildType === undefined
         ? warshipBuildSite(game, player, reference)
         : undefined;
-    if (warship) buildSites.push(warship);
+    if (warship) buildSites.push({ ...warship, action: "build_unit" });
     for (const tile of buildSamples) {
       if (requestedSites) break;
       for (const buildable of player.buildableUnits(tile, buildableTypes)) {
@@ -180,13 +168,17 @@ export class ObservationBuilder {
         )
           continue;
         buildSites.push({
+          action:
+            buildable.canUpgrade === false ? "build_unit" : "upgrade_structure",
           type: buildable.type,
           tile:
-            Nukes.has(buildable.type) ||
-            buildable.type === UnitType.Warship ||
-            buildable.canBuild === false
-              ? tile
-              : buildable.canBuild,
+            buildable.canUpgrade !== false
+              ? game.unit(buildable.canUpgrade)!.tile()
+              : Nukes.has(buildable.type) ||
+                  buildable.type === UnitType.Warship ||
+                  buildable.canBuild === false
+                ? tile
+                : buildable.canBuild,
           cost: Number(buildable.cost),
           upgradeId: buildable.canUpgrade,
         });
@@ -205,6 +197,7 @@ export class ObservationBuilder {
           const site = player.canBuild(UnitType.Port, tile);
           if (site === false) continue;
           buildSites.unshift({
+            action: "build_unit",
             type: UnitType.Port,
             tile: site,
             cost,
@@ -212,22 +205,6 @@ export class ObservationBuilder {
           });
           break;
         }
-    }
-    const spawnCandidates: AgentObservation["map"]["spawnCandidates"] = [];
-    if (game.inSpawnPhase() && !game.config().isRandomSpawn()) {
-      const start = Math.floor(
-        (this.candidates.length * index) /
-          Math.max(1, game.allPlayers().length),
-      );
-      for (
-        let offset = 0;
-        offset < this.candidates.length && spawnCandidates.length < 4;
-        offset++
-      ) {
-        const tile = this.candidates[(start + offset) % this.candidates.length];
-        if (!game.hasOwner(tile) && getSpawnTiles(game, tile, true))
-          spawnCandidates.push(point(tile));
-      }
     }
     const x = Math.min(query.x ?? game.x(reference), game.width() - 1);
     const y = Math.min(query.y ?? game.y(reference), game.height() - 1);
@@ -403,6 +380,9 @@ export class ObservationBuilder {
         name: rival.name(),
         alive: rival.isAlive(),
         tiles: rival.numTilesOwned(),
+        troops: Math.floor(rival.troops()),
+        gold: Number(rival.gold()),
+        maxTroops: Math.floor(game.config().maxTroops(rival)),
         allied: player.isAlliedWith(rival),
         sharesBorder: sharedBorders.has(rival.smallID()),
         canAttack:

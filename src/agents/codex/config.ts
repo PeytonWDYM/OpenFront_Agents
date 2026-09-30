@@ -14,9 +14,9 @@ export const MODEL = "gpt-6-luna";
 export const EFFORT = "low";
 export const REASONING_EFFORTS = ["low", "medium"] as const;
 export const VERSION = "0.158.0";
-export const CONTEXT_WINDOW = 150_000;
-// Retain recent decisions until the native history reaches 60,000 tokens.
-export const AUTO_COMPACT_TOKEN_LIMIT = 60_000;
+export const CONTEXT_WINDOW = 272_000;
+// Leave 38,400 tokens below Luna's 95% usable window for the next turn and compaction.
+export const AUTO_COMPACT_TOKEN_LIMIT = 220_000;
 
 const cachedModel = z
   .object({

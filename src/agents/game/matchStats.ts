@@ -110,6 +110,9 @@ export class MatchStats {
         requiredTiles,
         tilesOwned,
         landPercent: landPercent(tilesOwned),
+        percentUnit: "percent (0..100)" as const,
+        ownedLand: `${landPercent(tilesOwned).toFixed(2)}%`,
+        requiredLand: `${requiredLandPercent.toFixed(2)}%`,
         tilesRemaining: Math.max(0, requiredTiles - tilesOwned),
         elapsedSeconds,
         timerRemainingSeconds:

@@ -36,13 +36,25 @@ export function requestedBuildSites(
       )
     )
       continue;
-    sites.push({ type, tile: target, cost, upgradeId: false });
+    sites.push({
+      action: "build_unit",
+      type,
+      tile: target,
+      cost,
+      upgradeId: false,
+    });
     if (sites.length > 12) break;
   }
   if (sites.length <= 12)
     for (const unit of player.units(type)) {
       if (!inside(unit.tile()) || !player.canUpgradeUnit(unit)) continue;
-      sites.push({ type, tile: unit.tile(), cost, upgradeId: unit.id() });
+      sites.push({
+        action: "upgrade_structure",
+        type,
+        tile: unit.tile(),
+        cost,
+        upgradeId: unit.id(),
+      });
       if (sites.length > 12) break;
     }
   return { sites: sites.slice(0, 12), truncated: sites.length > 12 };
