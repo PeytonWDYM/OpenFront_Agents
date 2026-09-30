@@ -207,7 +207,9 @@ describe("SAM", () => {
         MessageType.SAM_HIT,
         defender.id(),
         undefined,
-        { unit },
+        { unit, missileType: type, targetTile: game.ref(3, 3) },
+        expect.any(Number),
+        attacker.id(),
       );
     },
   );

@@ -50,13 +50,38 @@ export function samCoverage(
         (player.isAlliedWith(owner) && !betrayed.has(owner.smallID()));
       return {
         unitId: unit.id(),
+        ownerId: owner.id(),
+        level: unit.level(),
+        tile: unit.tile(),
         x: game.x(unit.tile()),
         y: game.y(unit.tile()),
-        radius: game.config().samRange(unit.level()),
+        radius: game.config().dynamicSamRange(unit, game.ticks()),
+        configuredRadius: game.config().samRange(unit.level()),
+        ...missileReadiness(game, unit, game.config().SAMCooldown()),
         own,
         threatens: !friendly,
       };
     });
+}
+
+/** Slots describe native queues. Construction cannot intercept or launch. */
+export function missileReadiness(
+  game: Game,
+  unit: import("../../core/game/Game").Unit,
+  cooldown: number,
+) {
+  const underConstruction = unit.isUnderConstruction();
+  const reloadSlots = unit.missileTimerQueue().map((launchedAt) => ({
+    launchedAt,
+    readyAt: launchedAt + cooldown,
+    ticksRemaining: Math.max(0, launchedAt + cooldown - game.ticks()),
+  }));
+  return {
+    underConstruction,
+    totalSlots: unit.level(),
+    readySlots: underConstruction ? 0 : unit.level() - reloadSlots.length,
+    reloadSlots,
+  };
 }
 
 /** Match native atom/hydrogen previews. Coverage is an estimate, not a battle simulation. */
@@ -125,6 +150,22 @@ export function buildNukePreview(
       game.manhattanDist(b.tile(), request.tile),
   );
   const silo = silos[0];
+  const cost = game.unitInfo(request.type).cost(game, player);
+  const nativeCanBuild = player.canBuild(request.type, request.tile) !== false;
+  const canBuild = !targetingSelf && nativeCanBuild;
+  const canBuildReason = canBuild
+    ? null
+    : targetingSelf
+      ? "own_target"
+      : game.isSpawnImmunityActive()
+        ? "spawn_immunity"
+        : game.isImpassable(request.tile)
+          ? "impassable_target"
+          : player.gold() < cost
+            ? "insufficient_gold"
+            : silos.length === 0
+              ? "no_ready_silo"
+              : "native_build_rejected";
   const source = silo
     ? {
         unitId: silo.id(),
@@ -158,8 +199,17 @@ export function buildNukePreview(
     target,
     source,
     blast,
-    canBuild:
-      !targetingSelf && player.canBuild(request.type, request.tile) !== false,
+    cost: Number(cost),
+    canBuild,
+    canBuildReason,
+    readySilos: silos.map((unit) => ({
+      unitId: unit.id(),
+      tile: unit.tile(),
+      x: game.x(unit.tile()),
+      y: game.y(unit.tile()),
+      level: unit.level(),
+      ...missileReadiness(game, unit, config.SiloCooldown()),
+    })),
     targetingSelf,
     ownStructuresAtRisk,
     friendlyStructuresAtRisk,

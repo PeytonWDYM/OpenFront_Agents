@@ -118,6 +118,14 @@ export class DecisionFeedback {
       return {
         ...summary,
         status: "submitted" as const,
+        ...(summary.type === "upgrade_structure" ||
+        (summary.type === "build_unit" && action.existingUnitIds)
+          ? {
+              observation: unit
+                ? ("observed" as const)
+                : ("not observed" as const),
+            }
+          : {}),
         ...(unit
           ? {
               observedUnitId: unit.unitId,

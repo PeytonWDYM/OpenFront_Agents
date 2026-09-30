@@ -496,7 +496,7 @@ hostileSam.increaseLevel();
 preview = buildNukePreview(missileGame, launcher, request);
 assert.equal(
   preview.sams.find((sam) => sam.unitId === hostileSam.id())!.radius,
-  missileGame.config().samRange(2),
+  missileGame.config().dynamicSamRange(hostileSam, missileGame.ticks()),
 );
 assert(preview.interception.coverageRisk);
 assert(preview.trajectory);

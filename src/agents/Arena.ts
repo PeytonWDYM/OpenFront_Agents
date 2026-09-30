@@ -42,11 +42,18 @@ function imageMetadata(frame: MapImage, tick: number) {
     unitGroups: frame.unitGroups,
     unitGroupCount: frame.unitGroupCount,
     ...(frame.buildSites ? { buildSites: frame.buildSites } : {}),
+    ...(frame.tradeHeatmap ? { tradeHeatmap: frame.tradeHeatmap } : {}),
   };
 }
 
 export const ObserveWorldQuerySchema = ObserveQuerySchema.extend({
   quickChatKeys: z.boolean().optional(),
+  tradeHeatmap: z
+    .boolean()
+    .optional()
+    .describe(
+      "Current public ship density, piracy eligibility, and patrols. Returns data and an image. Off by default.",
+    ),
   image: z
     .boolean()
     .optional()
@@ -65,19 +72,23 @@ export const ObserveWorldQuerySchema = ObserveQuerySchema.extend({
     .describe(
       "Focus an image on this native player's current public territory. Do not combine with coordinates or nukePreview. Private sections still describe you.",
     ),
-}).refine(
-  (query) =>
-    query.playerId === undefined ||
-    (query.nukePreview === undefined &&
-      query.x === undefined &&
-      query.y === undefined &&
-      query.width === undefined &&
-      query.height === undefined),
-  {
-    message:
-      "Choose playerId focus, a coordinate region, or nukePreview. These view selectors cannot be combined.",
-  },
-);
+})
+  .refine(
+    (query) =>
+      query.playerId === undefined ||
+      (query.nukePreview === undefined &&
+        query.x === undefined &&
+        query.y === undefined &&
+        query.width === undefined &&
+        query.height === undefined),
+    {
+      message:
+        "Choose playerId focus, a coordinate region, or nukePreview. These view selectors cannot be combined.",
+    },
+  )
+  .refine((query) => !query.tradeHeatmap || query.nukePreview === undefined, {
+    message: "Choose tradeHeatmap or nukePreview for the requested image.",
+  });
 export const ThinkQuerySchema = z
   .object({
     note: z
@@ -201,7 +212,7 @@ export class Arena {
                 {
                   name: "observe_world",
                   description:
-                    "Read current own resources, victory progress, public leaderboard, trade traffic, map and unit levels, native legality, costs, and communication choices. Select sections or a region. Request image or nukePreview for a focused map.",
+                    "Read resources, military readiness, victory, public players, native legality, costs, and communication. Select sections or a region. Request image, tradeHeatmap, or nukePreview for a map.",
                   inputSchema: z.toJSONSchema(ObserveWorldQuerySchema),
                 },
                 {
@@ -390,6 +401,7 @@ export class Arena {
         resolution,
         nukePreview,
         playerId,
+        tradeHeatmap,
         ...region
       } = observationQuery;
       const focus =
@@ -407,7 +419,8 @@ export class Arena {
       );
       const sections =
         region.sections ??
-        (focus !== undefined ||
+        (tradeHeatmap === true ||
+        focus !== undefined ||
         region.buildType !== undefined ||
         region.x !== undefined ||
         region.y !== undefined ||
@@ -446,7 +459,7 @@ export class Arena {
           ? { spawnReview: this.game!.spawnReview(id) }
           : {}),
       };
-      if (!image && !nukePreview && !focus) return { data };
+      if (!image && !nukePreview && !focus && !tradeHeatmap) return { data };
       const portSites =
         region.buildType === UnitType.Port
           ? observation.map.buildSites
@@ -469,15 +482,31 @@ export class Arena {
       const preview = nukePreview
         ? await this.game!.visionNukePreview(id, nukePreview, resolution)
         : undefined;
-      const frame = preview
-        ? preview.frame
-        : await this.game!.visionRegion(
+      const heatmap = tradeHeatmap
+        ? await this.game!.visionTradeHeatmap(
             id,
-            imageRegion,
+            focus !== undefined ||
+              region.x !== undefined ||
+              region.y !== undefined ||
+              region.width !== undefined ||
+              region.height !== undefined
+              ? imageRegion
+              : undefined,
             overlays,
-            portSites,
             resolution,
-          );
+          )
+        : undefined;
+      const frame = heatmap
+        ? heatmap.frame
+        : preview
+          ? preview.frame
+          : await this.game!.visionRegion(
+              id,
+              imageRegion,
+              overlays,
+              portSites,
+              resolution,
+            );
       this.logs.add(
         id,
         "vision",
@@ -493,6 +522,7 @@ export class Arena {
         data: {
           ...data,
           ...(preview ? { nukePreview: preview.metadata } : {}),
+          ...(heatmap ? { tradeHeatmap: heatmap.metadata } : {}),
           image: imageMetadata(frame, observation.tick),
         },
         images: [frame],
