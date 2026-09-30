@@ -80,3 +80,79 @@ The focused checks run native game simulation without inference or live matches.
 - `tests/agents/qol-integration-e2e.ts`: complete tool results, prioritized units, both bomb preview images, and schema sizes.
 
 Run a check with `node node_modules/tsx/dist/cli.mjs tests/agents/<name>.ts`. Full TypeScript, lint, and production build checks also apply. Existing SAM and nuclear simulation tests were run with a local Windows path-alias configuration because the standard runner resolves a legacy browser path polyfill.
+
+## Agent 17 follow-up: initiative and missile spending
+
+This review covers Agent 17 - medium in game `agXF9DByww`.
+The frozen evidence ends at September 30, 2026, 10:54:23.460 UTC.
+It contains 45 completed decisions and one pending decision.
+The local evidence is `.agent-arena/audits/agent017-missile-review.json` in the serving checkout.
+Counts below describe this cutoff, rather than the later complete match.
+
+Agent 17 submitted two new silos and 29 silo upgrade calls requesting 137 levels.
+Requested levels are not purchased levels. Bulk upgrades stop when native requirements fail.
+Some owned silos came from conquests. One tracked silo rose from level 1 to level 59.
+The agent reached 80 ready launch slots but usually submitted one bomb per decision.
+It submitted 38 Atom Bomb intents. The event log recorded 18 launches, 15 interceptions, and three impacts.
+A submitted intent is not proof of a launch. The remaining 20 submissions had no recorded launch by this cutoff.
+The agent made six explicit observations, no missile preview query, and no saved strategy note.
+It continued to request upgrades despite idle slots and repeated interception feedback.
+
+The batch warning missed missile-only builds combined with upgrades.
+Native upgrades spend gold during initialization, before missile execution ticks, regardless of submission order.
+At decision 32, the agent had 1,214,017 gold and requested silo upgrades plus a 750,000-gold Atom Bomb.
+A silo upgrade costs 1,000,000 gold under these settings.
+This combination can spend the launch budget before the missile executes.
+A focused native simulation reproduces that failure and confirms that multiple same-target missiles can launch with sufficient resources.
+The warning now includes missile launches. It does not reserve gold, reorder actions, or impose an action limit.
+The logs do not prove that this budget collision caused every missing launch.
+
+The agent also divided small troop allocations among several fronts.
+At decision 14, it had 4,002,765 troops. Bordering Tanzania had 361,426 troops and Ethiopia had 967,207.
+It requested a six-percent ratio separately against four rivals and neutral land.
+At decision 43, it had 12,170,126 troops with no incoming attacks.
+Bordering DR Congo had 942,262 troops, 36,862 tiles, and 28,815,695 gold.
+The agent requested a four-percent ratio against DR Congo and neutral land, plus another silo upgrade.
+These facts show a visible opening and a small requested commitment. They do not establish a guaranteed winning attack.
+Terrain, defense coverage, troop density, and commitments elsewhere still matter.
+
+The median interval between post-spawn decision snapshots was 24 seconds.
+Medium nations check attacks every 55 to 70 simulation ticks, or about 5.5 to 7 seconds.
+Their structure behavior also runs between attack checks.
+The native target pipeline examines borders, tribes, damaged opponents, diplomacy, and weaker enemies without model inference.
+This gives nations a timing and domain-policy advantage. It does not show that their general intelligence exceeds Luna's.
+Native sources are `NationExecution.ts` and `utils/AiAttackBehavior.ts` under `src/core/execution/`.
+
+The prompt revision puts autonomous strategy before the mechanics reference.
+It asks agents to choose useful objectives, notice temporary openings, compare spending alternatives, and reconsider plans after actual outcomes.
+It removes repeated fixed upgrade counts and attack-ratio examples that could anchor repeated batches.
+Mechanics remain facts, rather than a required build order or attack quota.
+Missile previews, SAM coverage, economic feedback, diplomacy, coastal port legality, and arbitrary action batches remain available.
+
+[Official OpenAI reasoning guidance](https://developers.openai.com/api/docs/guides/reasoning-best-practices) recommends clear goals, direct prompts, and separated input sections.
+It also recommends avoiding requests for private step-by-step reasoning.
+The [GPT-6 guide](https://developers.openai.com/api/docs/guides/latest-model) says its family guidance starts from Astra observations and needs evaluation on the chosen model.
+These sources support the prompt structure. They do not establish a validated Luna game strategy.
+The bounded decision probe uses frozen text snapshots and records public outputs, actions, latency, and usage.
+It cannot establish win rate, visual understanding, or improvement across a complete match.
+
+The first probe ran eight turns: two snapshots, two reasoning levels, and old/new prompts.
+The old prompt requested five silo levels in every case. The first revision still requested upgrades in three of four cases.
+The second revision ran four new-prompt turns with explicit historical-context wording and the new derived missile budget.
+It requested zero, zero, one, and zero silo levels. Three decisions avoided further silo expansion.
+All four still requested combined quoted spending above current gold. The partial guard rejected one individually unaffordable SAM.
+Attack commitments remained uneven. One decision still requested a new City on a recorded upgrade site.
+These failures remain in the reports. The follow-up changes both instructions and observations and does not isolate a prompt effect.
+
+`militaryIntel.missileBudget` reports current gold-funded ready shots per weapon independently.
+It uses native quoted costs and every ready silo slot, including units beyond the detail limit.
+Other spending, target legality, and future cost changes can lower the actual result.
+The native tests cover finite gold, ready-slot limits, unfinished silos, disabled weapons, and zero-cost modifiers.
+
+To repeat the local probe, run `tests/agents/strategy-probe.ts --freeze` with `STRATEGY_PROBE_AUDIT` and `STRATEGY_PROBE_ROLLOUT` pointing to the saved evidence.
+Then run the script without `--freeze` through `tsx` using the installed authenticated Codex runtime.
+`STRATEGY_PROBE_ARMS=new` selects the four-turn follow-up. `STRATEGY_PROBE_REPORT` names its report.
+The freeze step saves source hashes, match settings, and exact public inputs in `.agent-arena/strategy-probe/frozen.json`.
+This optional probe consumes model usage. The native batch and military tests do not.
+
+Changes require a sidecar reload and new player threads. Existing match threads retain their original instructions.

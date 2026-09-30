@@ -50,6 +50,7 @@ export function militaryIntel(game: Game, player: Player) {
     underConstructionUnits: units.filter((unit) => unit.underConstruction)
       .length,
   });
+  const siloReadiness = readinessSummary(silos);
   const blastConcentration = (center: Unit, type: UnitType) => {
     const radius = config.nukeMagnitudes(type).outer;
     const affected = game
@@ -199,7 +200,27 @@ export function militaryIntel(game: Game, player: Player) {
     missileSilos: silos.slice(0, UNIT_DETAIL_LIMIT),
     missileSilosTotal: silos.length,
     missileSilosTruncated: silos.length > UNIT_DETAIL_LIMIT,
-    siloReadiness: readinessSummary(silos),
+    siloReadiness,
+    missileBudget: {
+      basis:
+        "Upper bounds from current gold and ready slots, per weapon independently. No other spending or target legality included.",
+      options: [UnitType.AtomBomb, UnitType.HydrogenBomb, UnitType.MIRV]
+        .filter((type) => !config.isUnitDisabled(type))
+        .map((type) => {
+          const cost = game.unitInfo(type).cost(game, player);
+          return {
+            type,
+            cost: Number(cost),
+            fundedReadyShots:
+              cost === 0n
+                ? siloReadiness.readySlots
+                : Math.min(
+                    siloReadiness.readySlots,
+                    Number(player.gold() / cost),
+                  ),
+          };
+        }),
+    },
     defensePosts: {
       units: posts.slice(0, UNIT_DETAIL_LIMIT).map(position),
       totalUnits: posts.length,

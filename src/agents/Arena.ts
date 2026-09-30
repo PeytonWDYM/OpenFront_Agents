@@ -98,7 +98,7 @@ export const ThinkQuerySchema = z
       .min(1)
       .max(600)
       .describe(
-        "Brief strategy summary. Record a goal or next step, not detailed reasoning.",
+        "Brief strategic memory: objective, commitment, observed result, or reconsideration trigger. No detailed reasoning.",
       ),
     observe: ObserveWorldQuerySchema.optional(),
   })
@@ -230,19 +230,19 @@ export class Arena {
                 {
                   name: "observe_world",
                   description:
-                    "Read resources, military readiness, victory, public players, native legality, costs, and communication. Select sections or a region. Request image, tradeHeatmap, or nukePreview for a map.",
+                    "Inspect current resources, military readiness, victory, rivals, legality, costs, or communication to resolve a decision-relevant uncertainty. Select sections or a region. image, tradeHeatmap, and nukePreview return maps.",
                   inputSchema: z.toJSONSchema(ObserveWorldQuerySchema),
                 },
                 {
                   name: "think",
                   description:
-                    "Save a brief plan for later decisions. Optionally request a focused observation. Does not submit actions. Act directly for routine decisions.",
+                    "Save a concise objective, commitment, observed result, or reconsideration trigger across decisions and compaction. Optional observe reads focused state. This tool does not submit actions.",
                   inputSchema: z.toJSONSchema(ThinkQuerySchema),
                 },
                 {
                   name: "act",
                   description:
-                    "Submit one intent or a batch of intents in order with native IDs. Batch independent legal actions to reduce tool overhead. Set attackRatio or nextDecisionSeconds when needed. Submissions are not atomic and do not guarantee execution.",
+                    "Carry out your chosen move with one intent or an unrestricted batch using native IDs. attackRatio overrides each army action separately. nextDecisionSeconds selects the next check. Submission is non-atomic and execution remains pending.",
                   inputSchema: agentActionToolSchema,
                 },
               ],

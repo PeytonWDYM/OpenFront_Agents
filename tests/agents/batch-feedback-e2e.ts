@@ -1,6 +1,9 @@
 // Failure cases: queued actions claim execution, array order promises build priority,
 // competing builds hide collisions, persistent army ratios imply one shared allocation,
 // unlimited bulk actions acquire a quota, or an absent/destroyed asset implies failure.
+// Missile cases: upgrades hide launch costs, an earlier affordable missile loses
+// its budget during upgrade init, same-target salvos imply placement collisions,
+// or sufficient gold and ready silo slots still permit only one missile.
 import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
 import { submitActions } from "../../src/agents/game/actionBatch";
@@ -190,6 +193,84 @@ assert.ok(
 );
 execute(1);
 assert.equal(city.level(), 42, "Bulk submissions keep native limits only");
+
+self.addGold(100_000_000n);
+const silo = self.buildUnit(UnitType.MissileSilo, game.ref(10, 50), {});
+const missileTarget = game.ref(90, 50);
+self.relinquish(missileTarget);
+const launchCost = game.unitInfo(UnitType.AtomBomb).cost(game, self);
+const upgradeCost = game.unitInfo(UnitType.MissileSilo).cost(game, self);
+self.removeGold(self.gold() - upgradeCost);
+assert.notEqual(self.canBuild(UnitType.AtomBomb, missileTarget), false);
+assert.ok(self.canUpgradeUnit(silo));
+const missileMixed = await submitActions(
+  {
+    intents: [
+      { type: "build_unit", unit: UnitType.AtomBomb, tile: missileTarget },
+      {
+        type: "upgrade_structure",
+        unit: UnitType.MissileSilo,
+        unitId: silo.id(),
+      },
+    ],
+  },
+  submit,
+  () => {},
+);
+assert.ok(missileMixed.accepted, "Both actions are affordable at submission");
+execute(3);
+assert.equal(silo.level(), 2, "Upgrade init charges before missile ticks");
+assert.ok(self.gold() < launchCost);
+assert.equal(
+  self.units(UnitType.AtomBomb).length,
+  0,
+  "An earlier missile cannot launch after the upgrade spends its budget",
+);
+assert.ok(
+  "warnings" in missileMixed &&
+    missileMixed.warnings?.some(
+      (warning) =>
+        /upgrades.*before/i.test(warning) &&
+        /missile.*launch/i.test(warning) &&
+        /cost|gold|budget/i.test(warning) &&
+        /regardless of array order/i.test(warning),
+    ),
+  "Missile-only build batches must explain native upgrade charge order",
+);
+const missileBudget = {
+  launchCost: launchCost.toString(),
+  upgradeCost: upgradeCost.toString(),
+  goldAfterUpgrade: self.gold().toString(),
+  missilesAfterUpgrade: self.units(UnitType.AtomBomb).length,
+};
+
+// Clear the new slot's native cooldown to provide two ready launch slots.
+silo.reloadMissile();
+self.addGold(launchCost * 3n);
+const salvo = await submitActions(
+  {
+    intents: Array.from({ length: 2 }, () => ({
+      type: "build_unit",
+      unit: UnitType.AtomBomb,
+      tile: missileTarget,
+    })),
+  },
+  submit,
+  () => {},
+);
+assert.ok("results" in salvo && salvo.results?.length === 2 && salvo.accepted);
+assert.ok(
+  !("warnings" in salvo) ||
+    !salvo.warnings?.some((warning) => /same tile|placement/i.test(warning)),
+  "Missiles with the same target do not compete for structure placement",
+);
+execute(3);
+assert.equal(self.units(UnitType.AtomBomb).length, 2);
+assert.equal(silo.missileTimerQueue().length, 2);
+const salvoOutcome = {
+  missilesLaunched: self.units(UnitType.AtomBomb).length,
+  occupiedLaunchSlots: silo.missileTimerQueue().length,
+};
 const economy = new MatchStats(game).observe(self).economy;
 assert.equal(economy.incomeWindowSeconds, 120);
 assert.equal(economy.incomeBasis, "trailing native counters");
@@ -209,6 +290,10 @@ await writeFile(
       vanished,
       army,
       unlimitedCount: "results" in unlimited ? unlimited.results?.length : 0,
+      missileMixed,
+      missileBudget,
+      salvo,
+      salvoOutcome,
       economy,
       modelRequests: 0,
     },
@@ -217,5 +302,5 @@ await writeFile(
   ),
 );
 console.log(
-  "PASS: native batch charge order, pending receipts, state-only feedback, and unlimited actions.",
+  "PASS: native build and missile batch charge order, salvo launches, pending receipts, state-only feedback, and unlimited actions.",
 );
