@@ -2465,6 +2465,7 @@
     "status_eliminated": "Eliminated",
     "status_error": "Error",
     "status_ready": "Ready",
+    "status_recovering": "Recovering in 10 seconds",
     "status_thinking": "Thinking",
     "status_waiting": "Waiting",
     "stop": "Stop agents",

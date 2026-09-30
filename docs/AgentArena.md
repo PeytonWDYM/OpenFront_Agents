@@ -17,6 +17,9 @@ It does not change the daily Codex configuration. Each player gets a separate pe
 - Interrupt active decisions when paused. Reject tool actions after pause or stop.
 - Serialize native compaction with decisions for that player.
 - Pause when the Codex subscription reports exhausted quota or a rate limit.
+- Recover temporary turn failures after 10 seconds without resetting the native match or stopping other players.
+- Isolate rejected prompts and permanent player errors. Do not automatically retry a safety-blocked request.
+- Keep cumulative token usage when a context-exhausted thread needs replacement.
 - Keep token usage visible without a configured token limit.
 - Count cumulative token usage by deltas. Do not count repeated notifications twice.
 - Show native input, cached input, cache-write input, output, and reasoning output for each agent and the combined list.
@@ -39,7 +42,8 @@ The setup also includes the native map picker, map size, difficulty, team mode, 
 Resource settings, construction speed, alliance duration, timers, and disabled units apply to the native game.
 Random map selection resolves once for the lobby. Each agent receives the resolved match settings with its instructions.
 Random spawn is off by default. Each agent chooses its spawn as its first decision.
-The spawn countdown waits for every agent to place a valid spawn, then runs for the normal duration.
+After every agent places a valid spawn, each agent gets one review turn with up to two optional relocations.
+The spawn countdown waits for every review to finish, then runs for the normal duration.
 Agents that already spawned wait without more model decisions. Spectators and human players do not delay this readiness check.
 The arena creates the lobby, joins the native page, and starts after the server confirms your selected role.
 Select a player to read its decisions, actions, and token usage. Enable **Show diagnostics** to inspect raw runtime events and observations.
@@ -69,7 +73,8 @@ Agents choose their own tactics. The prompt explains mechanics and encourages ac
 Agents can batch several builds or upgrades in one call. Native resources, placement rules, and cooldowns determine what executes.
 The bridge reads the latest native tick when a decision starts. Tick updates alone do not request model inference.
 It supplies only events newer than that agent's previous observation. Inspector logs stay local and are not appended to each prompt.
-Earlier decisions remain in the persistent Codex thread. Native compaction starts at a configured 60,000-token threshold.
+Earlier decisions remain in the persistent Codex thread. Its configured context window is 272,000 tokens.
+Native compaction starts at 220,000 tokens to leave room for the next decision and compaction.
 The latest final decision summary and explicit strategy note accompany each decision. These record intentions, not proof of execution.
 Decision feedback reports native resource changes, income, construction, troop commitments, and captured trade ships since the previous decision.
 Inspector reads and tool observations do not consume this feedback. Net troop changes are not combat losses.
@@ -105,6 +110,11 @@ The arena reports token usage without a configured token limit. Real subscriptio
 Hardware, subscription limits, match duration, and decision costs determine the practical agent count.
 
 Pause stops agent decisions. The multiplayer simulation continues. Stop closes agent sockets and the Codex runtime.
+Temporary turn failures retry after 10 seconds, with at most three consecutive recovery attempts.
+An exhausted context gets a replacement Codex thread. The native game, player seat, and cumulative usage remain intact.
+Prompt rejections and permanent input errors stop that agent. Other agents continue in an active match.
+If the failed agent still needs to finish manual spawn, the arena pauses and explains the blocked countdown.
+The arena does not choose a spawn for a failed agent. Quota, authentication, and shared runtime failures pause all decisions.
 Scripted mode is for deterministic verification only. It does not use model tokens.
 Runtime files and private thread logs are under `.agent-arena/`. Do not share these logs without review.
 

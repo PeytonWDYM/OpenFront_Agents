@@ -19,6 +19,7 @@ import {
   toolCall,
   turnState,
 } from "./protocol";
+import { CodexTurnError } from "./recovery";
 import {
   GameImage,
   gameToolResponse,
@@ -43,9 +44,15 @@ export type PlayerDefinition = {
 export type { GameImage, GameToolResult } from "./toolResult";
 type Player = {
   id: string;
+  definition: PlayerDefinition;
+  retired: boolean;
   reasoningEffort: AgentReasoningEffort;
   tools: Set<string>;
-  onTool: (name: string, args: unknown) => Promise<GameToolResult>;
+  onTool: (
+    name: string,
+    args: unknown,
+    isActive: () => boolean,
+  ) => Promise<GameToolResult>;
   onEvent: (event: Record<string, unknown>) => void;
   log: Promise<void>;
   usage: UsageAccounting;
@@ -57,6 +64,7 @@ type ActiveTurn = {
   started: Promise<void>;
   resolve: () => void;
   reject: (error: Error) => void;
+  error?: Record<string, unknown> & { message: string };
 };
 
 /** Local game-only Codex sessions. The app-server retains history and performs compaction. */
@@ -92,10 +100,7 @@ export class CodexRuntime {
       configuration.directory,
       configuration.isolatedHome,
       (method, params, id) => this.onMessage(method, params, id),
-      (error) => {
-        for (const turn of this.active.values()) turn.reject(error);
-        this.active.clear();
-      },
+      (error) => this.fail(error),
     );
     const initialized = z.object({ userAgent: z.string() }).parse(
       await this.transport.request("initialize", {
@@ -267,7 +272,9 @@ export class CodexRuntime {
         "Log into Codex with ChatGPT before starting game players.",
       );
     if (
-      [...this.players.values()].some((player) => player.id === definition.id)
+      [...this.players.values()].some(
+        (player) => player.id === definition.id && !player.retired,
+      )
     )
       throw new Error("The player already has a Codex thread.");
     const result = threadStart.parse(
@@ -311,6 +318,8 @@ export class CodexRuntime {
     }
     this.players.set(result.thread.id, {
       id: definition.id,
+      definition,
+      retired: false,
       reasoningEffort,
       tools: new Set(definition.tools.map((tool) => tool.name)),
       onTool,
@@ -352,6 +361,15 @@ export class CodexRuntime {
     return result.thread.id;
   }
 
+  /** Replace an exhausted session while retaining its native game seat and artifacts. */
+  async replacePlayer(threadId: string): Promise<string> {
+    const player = this.player(threadId);
+    if (this.active.has(threadId))
+      throw new Error("Wait for the active turn before replacing its thread.");
+    player.retired = true;
+    return this.createPlayer(player.definition, player.onTool, player.onEvent);
+  }
+
   turn(
     threadId: string,
     text: string,
@@ -382,7 +400,8 @@ export class CodexRuntime {
     method: string,
     params: Record<string, unknown>,
   ): Promise<void> {
-    this.player(threadId);
+    if (this.player(threadId).retired)
+      return Promise.reject(new Error("This Codex game thread has retired."));
     if (this.active.has(threadId))
       return Promise.reject(
         new Error("The Codex thread already has an active turn."),
@@ -453,6 +472,15 @@ export class CodexRuntime {
     return player;
   }
 
+  private fail(error: Error) {
+    for (const turn of this.active.values()) turn.reject(error);
+    this.active.clear();
+    for (const [threadId, player] of this.players) {
+      if (!player.retired)
+        this.emit(threadId, { type: "runtime_error", message: error.message });
+    }
+  }
+
   private emit(threadId: string, event: Record<string, unknown>) {
     const player = this.player(threadId);
     const serialized = serializeInspectorEvent(event);
@@ -462,7 +490,7 @@ export class CodexRuntime {
         `${serialized}\n`,
       ),
     );
-    player.onEvent(record.parse(JSON.parse(serialized)));
+    player.onEvent({ ...record.parse(JSON.parse(serialized)), threadId });
   }
 
   private async onMessage(
@@ -479,13 +507,28 @@ export class CodexRuntime {
         return;
       }
       const call = toolCall.parse(params);
-      const player = this.player(call.threadId);
       let response: Awaited<ReturnType<typeof gameToolResponse>>;
       try {
+        const player = this.players.get(call.threadId);
+        const active = this.active.get(call.threadId);
+        if (
+          !player ||
+          player.retired ||
+          !active ||
+          active.turnId !== call.turnId
+        )
+          throw new Error("This tool call belongs to an inactive game turn.");
         if (!player.tools.has(call.tool))
           throw new Error(`Unknown game tool: ${call.tool}`);
         response = await gameToolResponse(
-          await player.onTool(call.tool, call.arguments),
+          await player.onTool(
+            call.tool,
+            call.arguments,
+            () =>
+              !player.retired &&
+              this.active.get(call.threadId) === active &&
+              active.turnId === call.turnId,
+          ),
         );
       } catch (error) {
         response = await gameToolResponse(
@@ -502,7 +545,12 @@ export class CodexRuntime {
     }
     const threadId =
       typeof params.threadId === "string" ? params.threadId : undefined;
-    if (!threadId || !this.players.has(threadId)) return;
+    if (
+      !threadId ||
+      !this.players.has(threadId) ||
+      this.player(threadId).retired
+    )
+      return;
     this.emit(threadId, { method, params: record.parse(params) });
     if (method === "thread/tokenUsage/updated") {
       const usage = tokenUsage.parse(params).tokenUsage;
@@ -525,10 +573,18 @@ export class CodexRuntime {
       const active = this.active.get(threadId);
       if (active) active.turnId = started.id;
     }
+    if (method === "error") {
+      const failure = z
+        .object({ error: z.object({ message: z.string() }).passthrough() })
+        .parse(params).error;
+      const active = this.active.get(threadId);
+      // Provider retries remain part of this turn. Classify only its eventual failed completion.
+      if (active) active.error = failure;
+    }
     if (method === "turn/completed") {
       const completed = z.object({ turn: turnState }).parse(params).turn;
       const active = this.active.get(threadId);
-      if (!active) return;
+      if (!active || (active.turnId && active.turnId !== completed.id)) return;
       const player = this.player(threadId);
       if (player.hasCompaction) {
         // Reading native history flushes the compaction checkpoint before the local ledger read.
@@ -543,7 +599,14 @@ export class CodexRuntime {
       this.active.delete(threadId);
       if (completed.status === "failed")
         active.reject(
-          new Error(completed.error?.message ?? "Codex turn failed."),
+          new CodexTurnError({
+            ...active.error,
+            ...completed.error,
+            message:
+              completed.error?.message ??
+              active.error?.message ??
+              "Codex turn failed.",
+          }),
         );
       else active.resolve();
     }
