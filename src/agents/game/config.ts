@@ -29,7 +29,7 @@ export function agentGameConfig(options: AgentGameConfigOptions): GameConfig {
 export function matchSettingsPrompt(config: GameConfig): string {
   const { spawnReadyClientIDs, ...settings } = config;
   const spawnRule = spawnReadyClientIDs
-    ? " Choose a spawn tile in your first decision. The native countdown starts after every agent places a spawn."
+    ? " Choose a spawn tile in your first decision. After all placements, review your location and optionally relocate up to twice. The native countdown starts after every agent finishes review."
     : "";
   return `MATCH SETTINGS\nThe native lobby uses this configuration: ${JSON.stringify(settings)}\nThese settings override standard mechanics described below. Disabled units cannot be built. Infinite resources, instant builds, alliance duration, team victory, timers, overtime, and the Doomsday Clock apply when enabled. Use current legal sites, costs, available actions, and victory progress from observations. In team mode, teammates share victory.${spawnRule}\n\n`;
 }

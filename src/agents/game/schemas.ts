@@ -26,6 +26,7 @@ import {
 import { flattenedEmojiTable } from "../../core/Util";
 import type { AgentMatchStats } from "./matchStats";
 import type { NavalAffiliation } from "./naval";
+import type { SpawnSite } from "./spawnSites";
 
 // Native player intents only. Strict objects reject forged sender fields.
 export const AgentActionSchema = z.discriminatedUnion("type", [
@@ -264,6 +265,9 @@ export interface AgentObservation extends AgentMatchStats {
     name: string;
     alive: boolean;
     tiles: number;
+    troops: number;
+    gold: number;
+    maxTroops: number;
     allied: boolean;
     sharesBorder: boolean;
     canAttack: boolean;
@@ -298,7 +302,7 @@ export interface AgentObservation extends AgentMatchStats {
       terrain: string;
       ownerId: string | null;
     }[];
-    spawnCandidates: { tile: number; x: number; y: number }[];
+    spawnCandidates: SpawnSite[];
     borders: {
       tile: number;
       x: number;
@@ -333,6 +337,7 @@ export interface AgentObservation extends AgentMatchStats {
       };
     }[];
     buildSites: {
+      action: "build_unit" | "upgrade_structure";
       type: string;
       tile: number;
       x?: number;

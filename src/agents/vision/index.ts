@@ -4,16 +4,25 @@ import { Game, Player, PlayerType, UnitType } from "../../core/game/Game";
 import { NukePreview, samCoverage, trajectoryPoint } from "../game/nukePreview";
 import type { AgentObservation } from "../game/schemas";
 import { drawPortBuildSites, PortSiteMarker } from "./buildSites";
-import { drawUnitMarkers, TradeTrafficMarker } from "./markers";
+import { drawUnitLegend } from "./icons";
+import {
+  drawUnitMarkers,
+  TradeTrafficMarker,
+  UnitGroupMarker,
+} from "./markers";
 import { PlayerMarker, publicUnitMarkers } from "./metadata";
 import {
+  imageLimit,
   overlayKey,
   resolveOverlays,
   VisionLayers,
   VisionOverlays,
+  VisionResolution,
 } from "./options";
 import { encodePng } from "./png";
 import { Color, Raster, Region } from "./raster";
+export { VisionResolutionSchema } from "./options";
+export type { VisionResolution } from "./options";
 export type { Region } from "./raster";
 
 export type MapImage = {
@@ -21,6 +30,7 @@ export type MapImage = {
   url: string;
   width: number;
   height: number;
+  resolution: VisionResolution;
   region: Region;
   mapPixels: Region;
   tradeTraffic?: TradeTrafficMarker[];
@@ -30,6 +40,9 @@ export type MapImage = {
   players: PlayerMarker[];
   units: ReturnType<typeof publicUnitMarkers>["units"];
   unitCount: number;
+  unitGroups: UnitGroupMarker[];
+  // Successfully placed ship groups before the 32-entry metadata limit.
+  unitGroupCount: number;
 };
 export type MapVision = {
   tick: number;
@@ -46,6 +59,9 @@ type Frame = {
   players: PlayerMarker[];
   units: ReturnType<typeof publicUnitMarkers>["units"];
   unitCount: number;
+  unitGroups: UnitGroupMarker[];
+  unitGroupCount: number;
+  resolution: VisionResolution;
 };
 
 const terrainColors: Color[] = Array.from({ length: 256 }, (_, terrain) => {
@@ -118,8 +134,9 @@ function draw(
   preview?: NukePreview,
   overlays = resolveOverlays(),
   buildSites?: AgentObservation["map"]["buildSites"],
+  resolution: VisionResolution = "high",
 ): Frame {
-  const footer = preview || buildSites ? 88 : 66;
+  const footer = preview || buildSites ? 150 : 128;
   const scale = Math.min(
     (limit - 44) / region.width,
     (limit - footer) / region.height,
@@ -362,24 +379,20 @@ function draw(
         y: game.y(tile),
       });
   }
-  const tradeTraffic =
-    overlays.units || overlays.tradeRoutes
-      ? drawUnitMarkers(
-          game,
-          raster,
-          region,
-          mapPixels,
-          occupied,
-          self,
-          overlays.tradeRoutes,
-          overlays.units,
-        )
-      : [];
+  const { tradeTraffic, unitGroups, unitGroupCount } = drawUnitMarkers(
+    game,
+    raster,
+    region,
+    mapPixels,
+    occupied,
+    self,
+    overlays,
+  );
   if (self && overlays.labels)
     raster.text(
       "YOU YELLOW ALLY CYAN H HUMAN N NATION T TRIBE",
       8,
-      raster.height - 34,
+      raster.height - 88,
     );
   if (preview) {
     circle(
@@ -435,24 +448,20 @@ function draw(
     raster.text(
       "ORANGE BLAST RED SAM COVERAGE ESTIMATE",
       36,
-      raster.height - 34,
+      raster.height - 100,
     );
   }
-  if (overlays.units) {
-    raster.text(
-      "C CITY P PORT F FACTORY D DEF A SAM M SILO",
-      8,
-      raster.height - 23,
+  if (
+    overlays.structures ||
+    overlays.warships ||
+    overlays.transports ||
+    overlays.tradeShips
+  )
+    drawUnitLegend(
+      raster,
+      Math.max(mapPixels.width, mapPixels.height) > 1000 ? 2 : 1,
     );
-    raster.text(
-      "W WARSHIP B BOAT S TRADE - NUMBER IS LEVEL",
-      8,
-      raster.height - 12,
-    );
-  }
-  const units = overlays.units
-    ? publicUnitMarkers(game, region, self)
-    : { units: [], unitCount: 0 };
+  const units = publicUnitMarkers(game, region, self, overlays);
   const siteMarkers = buildSites
     ? drawPortBuildSites(raster, game, region, mapPixels, buildSites)
     : undefined;
@@ -461,10 +470,13 @@ function draw(
     region,
     mapPixels,
     overlays,
+    resolution,
+    unitGroups,
+    unitGroupCount,
     players: playerMarkers,
     ...units,
     ...(siteMarkers ? { buildSites: siteMarkers } : {}),
-    ...(self && (overlays.units || overlays.tradeRoutes)
+    ...(self && (overlays.tradeShips || overlays.tradeRoutes)
       ? { tradeTraffic }
       : {}),
   };
@@ -492,10 +504,11 @@ export class MapImages {
     game: Game,
     player: Player,
     options?: VisionOverlays,
+    resolution: VisionResolution = "high",
   ): Promise<MapVision> {
     const tick = game.ticks();
     const overlays = resolveOverlays(options);
-    const key = overlayKey(overlays);
+    const key = `${overlayKey(overlays)}-${resolution}`;
     if (
       this.overview?.game !== game ||
       this.overview.tick !== tick ||
@@ -509,11 +522,13 @@ export class MapImages {
           draw(
             game,
             { x: 0, y: 0, width: game.width(), height: game.height() },
-            768,
+            imageLimit(resolution, true),
             `WORLD TICK ${tick}`,
             undefined,
             undefined,
             overlays,
+            undefined,
+            resolution,
           ),
           `overview-${tick}-${key}.png`,
         ),
@@ -526,11 +541,13 @@ export class MapImages {
           draw(
             game,
             region,
-            512,
+            imageLimit(resolution),
             `TACTICAL TICK ${tick}`,
             player,
             undefined,
             overlays,
+            undefined,
+            resolution,
           ),
           `player-${player.smallID()}-${tick}-${key}.png`,
         )
@@ -549,6 +566,7 @@ export class MapImages {
     region: Region,
     options?: VisionOverlays,
     buildSites?: AgentObservation["map"]["buildSites"],
+    resolution: VisionResolution = "high",
   ): Promise<MapImage> {
     const tick = game.ticks();
     const overlays = resolveOverlays(options);
@@ -557,14 +575,15 @@ export class MapImages {
       draw(
         game,
         region,
-        512,
+        imageLimit(resolution),
         `REGION TICK ${tick}`,
         player,
         undefined,
         overlays,
         portSites,
+        resolution,
       ),
-      `region-${player.smallID()}-${tick}-${region.x}-${region.y}-${region.width}-${region.height}-${overlayKey(overlays)}${portSites ? "-ports" : ""}.png`,
+      `region-${player.smallID()}-${tick}-${region.x}-${region.y}-${region.width}-${region.height}-${overlayKey(overlays)}-${resolution}${portSites ? "-ports" : ""}.png`,
     );
   }
 
@@ -572,6 +591,7 @@ export class MapImages {
     game: Game,
     player: Player,
     preview: NukePreview,
+    resolution: VisionResolution = "high",
   ): Promise<MapImage> {
     const curve = preview.trajectory;
     const xs = [
@@ -596,12 +616,15 @@ export class MapImages {
       draw(
         game,
         region,
-        512,
+        imageLimit(resolution),
         `NUKE PREVIEW TICK ${game.ticks()}`,
         player,
         preview,
+        undefined,
+        undefined,
+        resolution,
       ),
-      `nuke-${player.smallID()}-${game.ticks()}-${preview.type === UnitType.AtomBomb ? "atom" : "hydro"}-${preview.target.tile}-${preview.rocketDirectionUp ? "up" : "down"}.png`,
+      `nuke-${player.smallID()}-${game.ticks()}-${preview.type === UnitType.AtomBomb ? "atom" : "hydro"}-${preview.target.tile}-${preview.rocketDirectionUp ? "up" : "down"}-${resolution}.png`,
     );
   }
 
@@ -616,6 +639,9 @@ export class MapImages {
       players,
       units,
       unitCount,
+      unitGroups,
+      unitGroupCount,
+      resolution,
     } = frame;
     const png = await encodePng(raster.width, raster.height, raster.rgb);
     await this.ready;
@@ -626,6 +652,7 @@ export class MapImages {
       url: `/api/agents/frames/${this.gameId}/${name}`,
       width: raster.width,
       height: raster.height,
+      resolution,
       region,
       mapPixels,
       detail: "high",
@@ -633,6 +660,8 @@ export class MapImages {
       players,
       units,
       unitCount,
+      unitGroups,
+      unitGroupCount,
       ...(tradeTraffic ? { tradeTraffic } : {}),
       ...(buildSites ? { buildSites } : {}),
     };

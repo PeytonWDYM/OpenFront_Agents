@@ -235,7 +235,11 @@ try {
       self.units().some((own) => own.id() === unit.id),
     ),
   );
-  assert.ok(projectDecisionObservation(observe()).map!.tradeTraffic.length > 0);
+  assert.ok(!("tradeTraffic" in projectDecisionObservation(observe()).map!));
+  assert.ok(
+    projectDecisionObservation(observe(), ["map"]).map!.tradeTraffic!.length >
+      0,
+  );
   advance(2, [
     { type: "allianceRequest", recipient: other.id(), clientID: "naval001" },
   ]);

@@ -1,5 +1,7 @@
 import { Game, Player, Structures, UnitType } from "../../core/game/Game";
 import { navalAffiliation, publicTradeTraffic } from "../game/naval";
+import { drawUnitIcon } from "./icons";
+import { resolveOverlays, unitLayerVisible, VisionLayers } from "./options";
 import { Color, Raster, Region } from "./raster";
 
 type Affiliation = ReturnType<typeof navalAffiliation>;
@@ -16,11 +18,15 @@ const navalColors: Record<Affiliation, Color> = {
   ally: [100, 223, 246],
   other: [239, 104, 99],
 };
-const affiliationSymbols: Record<Affiliation, string> = {
-  self: "Y",
-  team: "T",
-  ally: "A",
-  other: "O",
+export type UnitGroupMarker = {
+  type: UnitType;
+  ownerId: string;
+  // At most 32 exact IDs. Count includes every ship represented by the badge.
+  unitIds: number[];
+  count: number;
+  x: number;
+  y: number;
+  tile: number;
 };
 const overlaps = (box: Region, other: Region) =>
   box.x < other.x + other.width &&
@@ -36,8 +42,7 @@ export function drawUnitMarkers(
   mapPixels: Region,
   occupied: Region[],
   self?: Player,
-  tradeRoutes = false,
-  units = true,
+  layers: VisionLayers = resolveOverlays(),
 ) {
   const position = (tile: number) => ({
     x:
@@ -54,41 +59,39 @@ export function drawUnitMarkers(
     game.x(tile) < region.x + region.width &&
     game.y(tile) >= region.y &&
     game.y(tile) < region.y + region.height;
-  const symbols: Partial<Record<UnitType, string>> = {
-    [UnitType.City]: "C",
-    [UnitType.Port]: "P",
-    [UnitType.Factory]: "F",
-    [UnitType.DefensePost]: "D",
-    [UnitType.SAMLauncher]: "A",
-    [UnitType.MissileSilo]: "M",
-  };
   const ships = game
     .units(UnitType.Warship, UnitType.TransportShip, UnitType.TradeShip)
-    .filter((unit) => unit.isActive() && inside(unit.tile()));
-  const traffic: TradeTrafficMarker[] = self
-    ? publicTradeTraffic(
-        game,
-        self,
-        game.ref(
-          region.x + Math.floor(region.width / 2),
-          region.y + Math.floor(region.height / 2),
-        ),
-        inside,
-      ).map(({ destination, ...ship }) => ({
-        ...ship,
-        ...(destination
-          ? {
-              destination: {
-                ...destination,
-                inRegion: inside(destination.tile),
-              },
-            }
-          : {}),
-      }))
-    : [];
+    .filter(
+      (unit) =>
+        unit.isActive() &&
+        inside(unit.tile()) &&
+        unitLayerVisible(unit.type(), layers),
+    );
+  const traffic: TradeTrafficMarker[] =
+    self && (layers.tradeShips || layers.tradeRoutes)
+      ? publicTradeTraffic(
+          game,
+          self,
+          game.ref(
+            region.x + Math.floor(region.width / 2),
+            region.y + Math.floor(region.height / 2),
+          ),
+          inside,
+        ).map(({ destination, ...ship }) => ({
+          ...ship,
+          ...(destination
+            ? {
+                destination: {
+                  ...destination,
+                  inRegion: inside(destination.tile),
+                },
+              }
+            : {}),
+        }))
+      : [];
   // A dashed cue joins public positions. It does not expose a sailing path.
   for (const ship of traffic) {
-    if (!tradeRoutes) break;
+    if (!layers.tradeRoutes) break;
     if (!ship.destination) continue;
     const point = position(game.ref(ship.x, ship.y));
     const target = position(game.ref(ship.destination.x, ship.destination.y));
@@ -149,124 +152,131 @@ export function drawUnitMarkers(
       overlayPixel(endpoint.x + offset, endpoint.y + radius);
     }
   }
-  for (const unit of game.units(Structures.types)) {
-    if (!units) break;
-    if (!unit.isActive() || !inside(unit.tile())) continue;
+  const scale = Math.max(mapPixels.width, mapPixels.height) >= 600 ? 2 : 1;
+  const background: Color = [12, 18, 26];
+  const drawMarker = (
+    unit: (typeof ships)[number],
+    badge: string,
+    ship = false,
+  ) => {
     const point = position(unit.tile());
-    const label = `${symbols[unit.type()]}${unit.level()}`;
-    const width = label.length * 6 + 4;
-    const candidates = [
-      { x: point.x - width / 2, y: point.y - 15 },
-      { x: point.x - width / 2, y: point.y + 5 },
-      { x: point.x + 7, y: point.y - 4 },
-      { x: point.x - width - 7, y: point.y - 4 },
-      { x: point.x - width / 2, y: point.y - 27 },
-      { x: point.x - width / 2, y: point.y + 17 },
-      { x: point.x - width / 2, y: point.y - 39 },
-      { x: point.x - width / 2, y: point.y + 29 },
-    ].map((candidate) => ({
-      x: Math.max(
-        mapPixels.x,
-        Math.min(
-          mapPixels.x + mapPixels.width - width,
-          Math.floor(candidate.x),
-        ),
-      ),
-      y: Math.max(
-        mapPixels.y,
-        Math.min(mapPixels.y + mapPixels.height - 11, Math.floor(candidate.y)),
-      ),
-      width,
-      height: 11,
-    }));
-    const box =
-      candidates.find(
-        (candidate) => !occupied.some((other) => overlaps(candidate, other)),
-      ) ?? candidates[0];
-    const color: Color =
-      !self || unit.owner() === self
-        ? [255, 241, 116]
-        : self.isFriendly(unit.owner())
-          ? [100, 223, 246]
-          : [242, 247, 252];
-    raster.fill(box.x, box.y, box.width, box.height, [12, 18, 26]);
-    raster.text(label, box.x + 2, box.y + 2, color);
-    occupied.push(box);
-  }
-  for (const unit of ships) {
-    if (!units) break;
-    if (!self && unit.type() !== UnitType.TradeShip) continue;
-    const point = position(unit.tile());
-    for (let y = point.y - 4; y <= point.y + 6; y++)
-      for (let x = point.x - 4; x <= point.x + 4; x++)
-        if (
-          x >= mapPixels.x &&
-          x < mapPixels.x + mapPixels.width &&
-          y >= mapPixels.y &&
-          y < mapPixels.y + mapPixels.height
-        )
-          raster.pixel(x, y, [12, 18, 26]);
-    const color = self
+    const color: Color = self
       ? navalColors[navalAffiliation(self, unit.owner())]
-      : ([242, 247, 252] as const);
-    // Clip edge markers with a small local raster so text cannot enter the axes.
-    const marker = new Raster(5, 7);
-    marker.text(
-      unit.type() === UnitType.Warship
-        ? "W"
-        : unit.type() === UnitType.TransportShip
-          ? "B"
-          : "S",
-      0,
-      0,
-      color,
-    );
-    for (let y = 0; y < 7; y++)
-      for (let x = 0; x < 5; x++) {
-        const px = point.x - 2 + x,
-          py = point.y - 2 + y;
-        if (
-          px < mapPixels.x ||
-          px >= mapPixels.x + mapPixels.width ||
-          py < mapPixels.y ||
-          py >= mapPixels.y + mapPixels.height
-        )
-          continue;
-        const at = (y * 5 + x) * 3;
-        if (marker.rgb[at] === color[0] && marker.rgb[at + 1] === color[1])
-          raster.pixel(px, py, color);
-      }
-    occupied.push({ x: point.x - 4, y: point.y - 4, width: 9, height: 11 });
-  }
-  for (const ship of traffic) {
-    const label = `S${ship.id}/${ship.ownerSmallId}${affiliationSymbols[ship.affiliation]}`;
-    if (!units) break;
-    const width = label.length * 6 + 4;
-    if (width > mapPixels.width || mapPixels.height < 11) continue;
-    const point = position(game.ref(ship.x, ship.y));
-    const candidates = [-15, 9, -27, 21].map((offset) => ({
+      : [242, 247, 252];
+    const width = 17 * scale + (badge ? badge.length * 6 + 3 : 0);
+    const height = 17 * scale;
+    if (width > mapPixels.width || height > mapPixels.height) {
+      drawUnitIcon(
+        raster,
+        unit.type(),
+        point.x - 6 * scale,
+        point.y - 6 * scale,
+        color,
+        mapPixels,
+        scale,
+      );
+      return;
+    }
+    const offsets = ship
+      ? [{ x: -7 * scale, y: -7 * scale }]
+      : [
+          { x: -width / 2, y: -height - 4 },
+          { x: -width / 2, y: 7 },
+        ];
+    for (const distance of [1, 2, 3])
+      offsets.push(
+        { x: -width * 1.5 - 4, y: -height / 2 - (distance - 1) * height },
+        { x: width / 2 + 4, y: -height / 2 + (distance - 1) * height },
+        { x: -width / 2, y: -height * (distance + 1) - 4 },
+        { x: -width / 2, y: height * distance + 7 },
+      );
+    const candidates = offsets.map((offset) => ({
       x: Math.max(
         mapPixels.x,
         Math.min(
           mapPixels.x + mapPixels.width - width,
-          point.x - Math.floor(width / 2),
+          Math.floor(point.x + offset.x),
         ),
       ),
       y: Math.max(
         mapPixels.y,
-        Math.min(mapPixels.y + mapPixels.height - 11, point.y + offset),
+        Math.min(
+          mapPixels.y + mapPixels.height - height,
+          Math.floor(point.y + offset.y),
+        ),
       ),
       width,
-      height: 11,
+      height,
     }));
     const box = candidates.find(
       (candidate) => !occupied.some((other) => overlaps(candidate, other)),
     );
-    if (!box) continue;
-    raster.fill(box.x, box.y, box.width, box.height, [12, 18, 26]);
-    raster.text(label, box.x + 2, box.y + 2, navalColors[ship.affiliation]);
+    if (!box) return;
+    raster.line(
+      point.x,
+      point.y,
+      box.x + 7 * scale,
+      box.y + 7 * scale,
+      color,
+      mapPixels,
+    );
+    raster.fill(box.x, box.y, box.width, box.height, background);
+    drawUnitIcon(
+      raster,
+      unit.type(),
+      box.x + 2 * scale,
+      box.y + 2 * scale,
+      color,
+      mapPixels,
+      scale,
+    );
+    if (badge)
+      raster.text(
+        badge,
+        box.x + 16 * scale,
+        box.y + Math.floor((height - 7) / 2),
+        color,
+      );
     occupied.push(box);
-    ship.label = label;
+    return box;
+  };
+  for (const unit of game.units(Structures.types)) {
+    if (!layers.structures) break;
+    if (!unit.isActive() || !inside(unit.tile())) continue;
+    drawMarker(unit, String(unit.level()));
   }
-  return traffic;
+  // Nearby ships share a marker only when their public type and owner match.
+  const groups = new Map<string, typeof ships>();
+  for (const ship of ships) {
+    const point = position(ship.tile());
+    const cell = 24 * scale;
+    const key = `${ship.type()}-${ship.owner().id()}-${Math.floor((point.x - mapPixels.x) / cell)}-${Math.floor((point.y - mapPixels.y) / cell)}`;
+    const group = groups.get(key);
+    if (group) group.push(ship);
+    else groups.set(key, [ship]);
+  }
+  const unitGroups: UnitGroupMarker[] = [];
+  let unitGroupCount = 0;
+  for (const group of groups.values()) {
+    const unit = group[0];
+    const badge =
+      group.length > 1
+        ? `X${group.length}`
+        : unit.type() === UnitType.Warship
+          ? String(unit.level())
+          : "";
+    if (!drawMarker(unit, badge, true)) continue;
+    unitGroupCount++;
+    if (unitGroups.length >= 32) continue;
+    unitGroups.push({
+      type: unit.type(),
+      ownerId: unit.owner().id(),
+      unitIds: group.slice(0, 32).map((ship) => ship.id()),
+      count: group.length,
+      tile: unit.tile(),
+      x: game.x(unit.tile()),
+      y: game.y(unit.tile()),
+    });
+  }
+  return { tradeTraffic: traffic, unitGroups, unitGroupCount };
 }

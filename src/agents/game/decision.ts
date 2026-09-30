@@ -14,8 +14,15 @@ export function projectDecisionObservation(
     sections === undefined || sections.includes(section);
   const { canSendEmojiAllPlayers, canEmbargoAll, units, ...self } =
     observation.self;
-  const { cells, region, buildCosts, buildSites, publicStructures, ...map } =
-    observation.map;
+  const {
+    cells,
+    region,
+    buildCosts,
+    buildSites,
+    publicStructures,
+    tradeTraffic,
+    ...map
+  } = observation.map;
   const relevantIds = new Set([
     ...observation.self.allies,
     ...observation.self.incomingAllianceRequests,
@@ -100,6 +107,9 @@ export function projectDecisionObservation(
     ...(include("units") && publicStructures !== undefined
       ? { publicStructures }
       : {}),
+    ...(sections?.includes("units") && !sections.includes("map")
+      ? { tradeTraffic }
+      : {}),
     ...(include("rivals")
       ? {
           rivals: rivals.map((rival) => ({
@@ -109,6 +119,9 @@ export function projectDecisionObservation(
             smallId: rival.smallId,
             ...(rival.position ? { position: rival.position } : {}),
             tiles: rival.tiles,
+            troops: rival.troops,
+            gold: rival.gold,
+            maxTroops: rival.maxTroops,
             ...(rival.allied
               ? { allied: true, allianceExpiresAt: rival.allianceExpiresAt }
               : {}),
@@ -130,6 +143,7 @@ export function projectDecisionObservation(
       ? {
           map: {
             ...map,
+            ...(sections?.includes("map") ? { tradeTraffic } : {}),
             buildSites: buildSites.map(({ upgradeId, ...site }) =>
               upgradeId === false ? site : { ...site, upgradeId },
             ),

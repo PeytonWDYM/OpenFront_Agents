@@ -25,19 +25,22 @@ import { TurnQueue } from "./TurnQueue";
 import type { AgentPlayer, ArenaJoin, ArenaSnapshot } from "./types";
 import type { MapImage, Region } from "./vision";
 import { portBuildSiteRegion } from "./vision/buildSites";
-import { VisionOverlaySchema } from "./vision/options";
+import { VisionOverlaySchema, VisionResolutionSchema } from "./vision/options";
 
 function imageMetadata(frame: MapImage, tick: number) {
   return {
     tick,
     width: frame.width,
     height: frame.height,
+    resolution: frame.resolution,
     region: frame.region,
     mapPixels: frame.mapPixels,
     overlays: frame.overlays,
     players: frame.players,
     units: frame.units,
     unitCount: frame.unitCount,
+    unitGroups: frame.unitGroups,
+    unitGroupCount: frame.unitGroupCount,
     ...(frame.buildSites ? { buildSites: frame.buildSites } : {}),
   };
 }
@@ -49,6 +52,9 @@ export const ObserveWorldQuerySchema = ObserveQuerySchema.extend({
     .optional()
     .describe("Return a map image of the requested region."),
   overlays: VisionOverlaySchema.optional(),
+  resolution: VisionResolutionSchema.optional().describe(
+    "Map image detail preset. Defaults to high.",
+  ),
   nukePreview: NukePreviewRequestSchema.optional().describe(
     "Preview an atom or hydrogen bomb trajectory, blast, and SAM coverage risk. Returns an image.",
   ),
@@ -381,6 +387,7 @@ export class Arena {
         quickChatKeys: includeQuickChatKeys,
         image,
         overlays,
+        resolution,
         nukePreview,
         playerId,
         ...region
@@ -427,13 +434,18 @@ export class Arena {
               },
             }
           : projectDecisionObservation(observation, sections);
-      const data = includeQuickChatKeys
-        ? {
-            ...projected,
-            ...(focus ? { target: focus.target } : {}),
-            quickChatKeys,
-          }
-        : { ...projected, ...(focus ? { target: focus.target } : {}) };
+      const data = {
+        ...(includeQuickChatKeys
+          ? {
+              ...projected,
+              ...(focus ? { target: focus.target } : {}),
+              quickChatKeys,
+            }
+          : { ...projected, ...(focus ? { target: focus.target } : {}) }),
+        ...(observation.spawnPhase
+          ? { spawnReview: this.game!.spawnReview(id) }
+          : {}),
+      };
       if (!image && !nukePreview && !focus) return { data };
       const portSites =
         region.buildType === UnitType.Port
@@ -455,11 +467,17 @@ export class Arena {
         );
       }
       const preview = nukePreview
-        ? await this.game!.visionNukePreview(id, nukePreview)
+        ? await this.game!.visionNukePreview(id, nukePreview, resolution)
         : undefined;
       const frame = preview
         ? preview.frame
-        : await this.game!.visionRegion(id, imageRegion, overlays, portSites);
+        : await this.game!.visionRegion(
+            id,
+            imageRegion,
+            overlays,
+            portSites,
+            resolution,
+          );
       this.logs.add(
         id,
         "vision",
@@ -533,20 +551,27 @@ export class Arena {
     this.halted.delete(id);
     player.status = "thinking";
     let timeout: ReturnType<typeof setTimeout> | undefined;
+    let reviewTurn = false;
     try {
       const observation = this.game!.observe(id);
+      const spawnReview = this.game!.spawnReview(id);
       if (
         observation.spawnPhase &&
-        (this.game!.config.randomSpawn || observation.self.spawned)
+        (this.game!.config.randomSpawn ||
+          spawnReview.stage === "waiting" ||
+          spawnReview.stage === "confirmed")
       ) {
         player.status = "waiting";
         return 500;
       }
+      reviewTurn = spawnReview.stage === "review";
       const decisionFeedback = this.game!.decisionFeedback(id);
       if (this.state.settings.mode === "scripted") {
-        const action = scriptedAction(observation);
-        if (!action) return 500;
-        await this.tool(id, "act", { intent: action });
+        if (!reviewTurn) {
+          const action = scriptedAction(observation);
+          if (!action) return 500;
+          await this.tool(id, "act", { intent: action });
+        }
       } else {
         const vision = await this.game!.vision(id);
         if (this.state.phase !== "running" || this.halted.has(id)) return;
@@ -577,6 +602,7 @@ export class Arena {
         const text = JSON.stringify({
           ...projectDecisionObservation(observation),
           decisionFeedback,
+          ...(observation.spawnPhase ? { spawnReview } : {}),
           ...(this.decisionSummaries.has(id)
             ? { previousDecisionSummary: this.decisionSummaries.get(id) }
             : {}),
@@ -597,7 +623,9 @@ export class Arena {
         await this.runtime!.turn(
           player.threadId!,
           observation.spawnPhase
-            ? `Choose a legal spawnCandidates tile and submit a spawn intent now. The countdown waits for every agent to place a spawn. Current game state: ${text}`
+            ? reviewTurn
+              ? `Every agent now has a valid placement. Review the current map and neighbors. Keep your current location or submit up to two spawn relocations during this turn. You may choose any legal tile. Suggestions are not exhaustive. This turn's end confirms your latest valid placement. The countdown starts after every agent finishes review. Current game state: ${text}`
+              : `Choose any legal spawn tile and submit a spawn intent. spawnCandidates are geographic suggestions, not an exhaustive list. You will have one review turn after all agents place a spawn, with up to two optional relocations. Current game state: ${text}`
             : `Current game state and your previous decision summary follow. Choose your next actions: ${text}`,
           frames,
         );
@@ -619,6 +647,8 @@ export class Arena {
       }
     } finally {
       clearTimeout(timeout);
+      if (reviewTurn && this.state.phase === "running")
+        this.game!.confirmSpawn(id);
       this.requestedDelays.delete(id);
       if (player.alive) player.status = player.error ? "error" : "ready";
     }

@@ -69,7 +69,7 @@ export function drawPortBuildSites(
   raster.text(
     "GREEN P1..P12 PORT SITES - USE TILE IDS",
     8,
-    raster.height - 45,
+    raster.height - 110,
     [100, 255, 170],
   );
   return markers;

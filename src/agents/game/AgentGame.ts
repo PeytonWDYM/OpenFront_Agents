@@ -20,9 +20,10 @@ import {
 } from "../../core/game/GameUpdates";
 import { getAgentReasoningEffort } from "../Reasoning";
 import { MapImages, playerTerritoryRegion } from "../vision";
-import { VisionOverlays } from "../vision/options";
+import { VisionOverlays, VisionResolution } from "../vision/options";
 import { LocalMapLoader } from "./LocalMapLoader";
 import { PlayerSocket } from "./PlayerSocket";
+import { assertAgentBuild, assertAgentUpgrade } from "./buildLegality";
 import { agentGameConfig, AgentGameConfigOptions } from "./config";
 import { projectDecisionObservation } from "./decision";
 import { playerEvents } from "./events";
@@ -123,6 +124,7 @@ export class AgentGame {
   private allianceReminders = new Map<string, Map<number, number>>();
   private attackRatios = new Map<string, number>();
   private buildStreaks = new Map<string, number>();
+  private spawnRelocations = new Map<string, number>();
   private mapImages?: MapImages;
   private gameId_ = "";
   private workerId = 0;
@@ -223,6 +225,7 @@ export class AgentGame {
     );
     if (!this.config.randomSpawn) {
       this.config.spawnReadyClientIDs = this.seats.map((seat) => seat.clientId);
+      this.config.requireSpawnConfirmation = true;
       await this.admin(`/api/adminbot/game/${this.gameId_}/intent`, {
         type: "update_game_config",
         config: this.config,
@@ -409,6 +412,46 @@ export class AgentGame {
     return projectDecisionObservation(this.observe(agentId));
   }
 
+  spawnReview(agentId: string) {
+    const game = this.runner!.game;
+    const player = this.player(agentId);
+    const allPlaced = this.seats.every((seat) =>
+      game.playerByClientID(seat.clientId)?.hasSpawned(),
+    );
+    return {
+      stage:
+        !game.inSpawnPhase() || this.config.randomSpawn
+          ? ("complete" as const)
+          : !player.hasSpawned()
+            ? ("placement" as const)
+            : player.hasConfirmedSpawn()
+              ? ("confirmed" as const)
+              : allPlaced
+                ? ("review" as const)
+                : ("waiting" as const),
+      allPlaced,
+      relocationsRemaining: Math.max(
+        0,
+        2 -
+          Math.max(
+            player.numSpawnRelocations(),
+            this.spawnRelocations.get(agentId) ?? 0,
+          ),
+      ),
+    };
+  }
+
+  /** Confirm the latest accepted placement after the agent's review turn ends. */
+  confirmSpawn(agentId: string): void {
+    // Socket order applies earlier relocations before this confirmation.
+    const player = this.player(agentId);
+    if (this.spawnReview(agentId).stage !== "review") return;
+    this.seat(agentId).send({
+      type: "intent",
+      intent: { type: "spawn", tile: player.spawnTile()!, confirm: true },
+    });
+  }
+
   /** Advance feedback only when the agent starts a decision. */
   decisionFeedback(agentId: string) {
     const player = this.player(agentId);
@@ -416,9 +459,18 @@ export class AgentGame {
     return this.feedback!.begin(player);
   }
 
-  async vision(agentId: string, overlays?: VisionOverlays) {
+  async vision(
+    agentId: string,
+    overlays?: VisionOverlays,
+    resolution: VisionResolution = "high",
+  ) {
     const player = this.player(agentId);
-    return this.mapImages!.render(this.runner!.game, player, overlays);
+    return this.mapImages!.render(
+      this.runner!.game,
+      player,
+      overlays,
+      resolution,
+    );
   }
 
   async visionRegion(
@@ -426,6 +478,7 @@ export class AgentGame {
     region: { x: number; y: number; width: number; height: number },
     overlays?: VisionOverlays,
     buildSites?: AgentObservation["map"]["buildSites"],
+    resolution: VisionResolution = "high",
   ) {
     return this.mapImages!.renderRegion(
       this.runner!.game,
@@ -433,6 +486,7 @@ export class AgentGame {
       region,
       overlays,
       buildSites,
+      resolution,
     );
   }
 
@@ -441,13 +495,18 @@ export class AgentGame {
     return publicPlayerFocus(this.runner!.game, viewer, playerId);
   }
 
-  async visionNukePreview(agentId: string, request: NukePreviewRequest) {
+  async visionNukePreview(
+    agentId: string,
+    request: NukePreviewRequest,
+    resolution: VisionResolution = "high",
+  ) {
     const player = this.player(agentId);
     const preview = buildNukePreview(this.runner!.game, player, request);
     const frame = await this.mapImages!.renderNukePreview(
       this.runner!.game,
       player,
       preview,
+      resolution,
     );
     return {
       frame,
@@ -475,6 +534,38 @@ export class AgentGame {
         ? this.attackRatios.get(agentId)!
         : AttackRatioSchema.parse(attackRatio);
     let intent = AgentActionSchema.parse(args);
+    if (intent.type === "spawn") {
+      const review = this.spawnReview(agentId);
+      if (review.stage !== "placement" && review.stage !== "review")
+        throw new Error(
+          "Spawn choices are available during placement and the review turn.",
+        );
+      if (review.stage === "review" && review.relocationsRemaining === 0)
+        throw new Error(
+          "This spawn review permits at most two relocation submissions.",
+        );
+      const game = this.runner!.game;
+      if (
+        !game.isValidRef(intent.tile) ||
+        !game.isLand(intent.tile) ||
+        game.isImpassable(intent.tile) ||
+        (game.hasOwner(intent.tile) &&
+          game.ownerID(intent.tile) !== player.smallID())
+      )
+        throw new Error(
+          "Choose passable land that is unowned or belongs to your current spawn.",
+        );
+      if (review.stage === "review")
+        this.spawnRelocations.set(
+          agentId,
+          Math.max(
+            player.numSpawnRelocations(),
+            this.spawnRelocations.get(agentId) ?? 0,
+          ) + 1,
+        );
+      // The harness confirms after the review turn, so initial choices cannot skip it.
+      intent = { type: "spawn", tile: intent.tile };
+    }
     if (intent.type === "build_unit") {
       if (
         !PlayerBuildable.has(intent.unit) ||
@@ -485,14 +576,10 @@ export class AgentGame {
         );
       const game = this.runner!.game;
       assertAgentNuclearTarget(game, player, intent.unit, intent.tile);
-      if (
-        !game.isValidRef(intent.tile) ||
-        player.canBuild(intent.unit, intent.tile) === false
-      )
-        throw new Error(
-          `Cannot build ${intent.unit} at tile ${intent.tile}. Required gold: ${game.unitInfo(intent.unit).cost(game, player)}; available: ${player.gold()}. Use a current matching buildSite or inspect the target region.${intent.unit === UnitType.Port ? " Ports require owned coastal land beside water and spacing from structures. Use buildSites.tile, not image x/y." : ""}`,
-        );
+      assertAgentBuild(game, player, intent.unit, intent.tile);
     }
+    if (intent.type === "upgrade_structure")
+      assertAgentUpgrade(this.runner!.game, player, intent.unit, intent.unitId);
     if (
       (intent.type === "attack" &&
         (intent.troops === null || attackRatio !== undefined)) ||

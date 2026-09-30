@@ -1,7 +1,7 @@
 // Failure cases: wrong sender, duplicate turns, private chat leaks, illegal management
 // actions, lost spawn intents, expansion no-ops, missing native build execution,
 // absent tribes/nations, crowded agent spawns, invalid native recipient IDs,
-// lost diplomatic replies, redundant map samples, leaked rival resources,
+// lost diplomatic replies, redundant map samples, wrong public rival resources,
 // ignored nation counts, disabled nations that still spawn, and extra nations that never spawn.
 // Controls failures: invalid ratios, lost ratio state, wrong percentage forces,
 // changed explicit troop amounts, rounded boat forces, missing actions, and oversized tool schemas.
@@ -11,7 +11,7 @@
 // Nuclear failure: a legal launch-silo coordinate replaces the requested enemy target.
 // Land attack failure: permissions expose an attack against a player with no shared land border.
 // Regional units failures: later owned IDs disappear, public structures are missing,
-// or enemy ships and private resources leak into a regional inspection.
+// or enemy ships and private orders leak into a regional inspection.
 import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
 import { projectDecisionObservation } from "../../src/agents/game/decision";
@@ -259,11 +259,23 @@ async function nativeObservationCheck(start: GameStartInfo) {
       self.canAttackPlayer(rival),
     );
   }
-  assert.ok(
-    bordered.rivals!.every(
-      (rival) => !("gold" in rival) && !("troops" in rival),
-    ),
-  );
+  for (const rival of bordered.rivals!) {
+    const native = world.player(rival.playerId);
+    assert.equal(rival.gold, Number(native.gold()));
+    assert.equal(rival.troops, Math.floor(native.troops()));
+    assert.equal(rival.maxTroops, Math.floor(world.config().maxTroops(native)));
+    for (const privateField of [
+      "incomingAttacks",
+      "outgoingAttacks",
+      "attackRatio",
+      "units",
+      "orders",
+    ])
+      assert.ok(
+        !(privateField in rival),
+        `Rival ${privateField} stays private`,
+      );
+  }
 
   const boats = await createGameRunner(
     {
@@ -560,9 +572,26 @@ async function nativePopulationCheck() {
     view.rivals.some((rival) => rival.playerId === tribe.id()),
     "Relevant tribe ally stays visible",
   );
-  assert.ok(
-    view.rivals.every((rival) => !("gold" in rival) && !("troops" in rival)),
-  );
+  for (const rival of view.rivals) {
+    const player = native.player(rival.playerId);
+    assert.equal(rival.gold, Number(player.gold()));
+    assert.equal(rival.troops, Math.floor(player.troops()));
+    assert.equal(
+      rival.maxTroops,
+      Math.floor(native.config().maxTroops(player)),
+    );
+    for (const privateField of [
+      "incomingAttacks",
+      "outgoingAttacks",
+      "attackRatio",
+      "units",
+      "orders",
+    ])
+      assert.ok(
+        !(privateField in rival),
+        `Rival ${privateField} stays private`,
+      );
+  }
   assert.equal(view.map.cells.length, 0);
   const compact = projectDecisionObservation(view);
   assert.ok(
@@ -774,6 +803,18 @@ try {
       clientID: seats[1].playerId,
     }),
   );
+  const spawnReviews = seats.map((seat) => ({
+    agentId: seat.id,
+    ...game.spawnReview(seat.id),
+  }));
+  assert.ok(spawnReviews.every((review) => review.stage === "review"));
+  assert.ok(spawnReviews.every((review) => review.allPlaced));
+  assert.ok(
+    seats.every((seat) => game.observe(seat.id).spawnPhase),
+    "The spawn countdown stays held until every review is confirmed",
+  );
+  artifact.spawnReviews = spawnReviews;
+  for (const seat of seats) game.confirmSpawn(seat.id);
   await waitFor(() => !game.observe(seats[0].id).spawnPhase);
   const seatId = seats[0].id;
   assert.equal(game.observe(seatId).self.attackRatio, 0.2);

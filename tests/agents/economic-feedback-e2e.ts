@@ -126,6 +126,7 @@ assert.equal(partial.actions[0].observedLevel, 5);
 assert.equal(partial.construction.changes[0].previousLevel, 4);
 assert.equal(partial.construction.changes[0].level, 5);
 
+self.addGold(100_000_000n);
 for (let index = 0; index < 20; index++)
   await bridge.act("agent001", {
     type: "upgrade_structure",

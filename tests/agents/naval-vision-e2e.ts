@@ -7,6 +7,7 @@ import {
   drawUnitMarkers,
   TradeTrafficMarker,
 } from "../../src/agents/vision/markers";
+import { resolveOverlays } from "../../src/agents/vision/options";
 import { encodePng } from "../../src/agents/vision/png";
 import { Raster, Region } from "../../src/agents/vision/raster";
 import {
@@ -61,6 +62,7 @@ const images = new MapImages("synthetic-coast-naval-vision-e2e");
 const region = { x: 5, y: 0, width: 11, height: 16 };
 const frame = await images.renderRegion(game, self, region, {
   tradeRoutes: true,
+  tradeShips: true,
 });
 // Independent layer failures: route cues disappear when unit markers are off.
 const routeOnly = await images.renderRegion(game, self, region, {
@@ -115,26 +117,19 @@ for (const [index, ship] of ships.entries()) {
   assert.equal(detail.ownerId, ship.owner().id());
   assert.equal(detail.ownerSmallId, ship.owner().smallID());
   assert.equal(detail.affiliation, affiliations[index]);
-  assert.equal(
-    detail.label,
-    `S${ship.id()}/${ship.owner().smallID()}${["Y", "T", "A", "O"][index]}`,
-  );
+  assert.equal(detail.label, undefined, "Precise ship IDs belong in metadata");
   assert.equal(detail.destination?.id, ship.toUpdate().targetUnitId);
   assert.equal(detail.destination?.x, game.x(ship.targetUnit()!.tile()));
   const point = position(ship.tile());
-  const glyph = new Raster(5, 7);
-  glyph.text("S", 0, 0, colors[index] as [number, number, number]);
-  for (let y = 0; y < 7; y++)
-    for (let x = 0; x < 5; x++) {
-      const expected = [
-        ...glyph.rgb.subarray((y * 5 + x) * 3, (y * 5 + x) * 3 + 3),
-      ];
-      if (expected[0] === colors[index][0] && expected[1] === colors[index][1])
-        assert.deepEqual(
-          pixel(point.x - 2 + x, point.y - 2 + y),
-          colors[index],
-        );
-    }
+  let colored = 0;
+  for (let y = point.y - 10; y <= point.y + 10; y++)
+    for (let x = point.x - 10; x <= point.x + 10; x++)
+      if (pixel(x, y).every((channel, at) => channel === colors[index][at]))
+        colored++;
+  assert(
+    colored > 15,
+    "A recognizable ship icon must use the native affiliation color",
+  );
   const endpoint = position(ship.targetUnit()!.tile());
   assert.deepEqual(
     pixel(endpoint.x, endpoint.y - 3),
@@ -148,7 +143,6 @@ assert.deepEqual(
     "affiliation",
     "destination",
     "id",
-    "label",
     "ownerId",
     "ownerSmallId",
     "tile",
@@ -166,12 +160,17 @@ const overviewA = (await images.render(game, self)).overview;
 const overviewB = (await images.render(game, owners[3])).overview;
 assert.equal(overviewA, overviewB);
 assert.equal(overviewA.tradeTraffic, undefined);
-const offCrop = await images.renderRegion(game, self, {
-  x: 9,
-  y: 0,
-  width: 5,
-  height: 3,
-});
+const offCrop = await images.renderRegion(
+  game,
+  self,
+  {
+    x: 9,
+    y: 0,
+    width: 5,
+    height: 3,
+  },
+  { tradeShips: true },
+);
 assert.deepEqual(
   offCrop.tradeTraffic?.map((row) => row.id),
   [ships[0].id()],
@@ -183,7 +182,7 @@ const tiny = await images.renderRegion(game, self, {
   width: 1,
   height: 1,
 });
-assert(tiny.width <= 512 && tiny.height <= 512);
+assert(tiny.width <= 768 && tiny.height <= 768);
 const occupied: Region[] = [];
 const markerRaster = new Raster(frame.width, frame.height);
 const markerDetails = drawUnitMarkers(
@@ -193,12 +192,10 @@ const markerDetails = drawUnitMarkers(
   frame.mapPixels,
   occupied,
   self,
+  resolveOverlays({ tradeShips: true }),
 );
-const labelBoxes = occupied.slice(ports.length + ships.length);
-assert.equal(
-  labelBoxes.length,
-  markerDetails.filter((row) => row.label).length,
-);
+const labelBoxes = occupied;
+assert(markerDetails.tradeTraffic.every((row) => row.label === undefined));
 for (const [index, box] of labelBoxes.entries()) {
   assert(box.x >= frame.mapPixels.x && box.y >= frame.mapPixels.y);
   assert(box.x + box.width <= frame.mapPixels.x + frame.mapPixels.width);
@@ -209,7 +206,7 @@ for (const [index, box] of labelBoxes.entries()) {
         box.x + box.width <= previous.x ||
         box.y >= previous.y + previous.height ||
         box.y + box.height <= previous.y,
-      "Detailed ship labels must not overlap",
+      "Unit icons and badges must not overlap",
     );
 }
 const skinnyRegion = { x: 11, y: 0, width: 1, height: 16 };
@@ -224,7 +221,7 @@ const skinnyDetails = drawUnitMarkers(
   [],
   self,
 );
-assert(skinnyDetails.every((row) => row.label === undefined));
+assert(skinnyDetails.tradeTraffic.every((row) => row.label === undefined));
 for (let y = 0; y < clipped.height; y++)
   for (let x = 0; x < clipped.width; x++) {
     if (
@@ -243,17 +240,17 @@ for (let y = 0; y < clipped.height; y++)
   }
 ships[0].setTargetUnit(undefined);
 assert.equal(
-  (await images.renderRegion(game, self, region)).tradeTraffic?.find(
-    (row) => row.id === ships[0].id(),
-  )?.destination,
+  (
+    await images.renderRegion(game, self, region, { tradeShips: true })
+  ).tradeTraffic?.find((row) => row.id === ships[0].id())?.destination,
   undefined,
 );
 ships[0].setTargetUnit(ports[1]);
 ships[0].setOwner(owners[3]);
 assert.equal(
-  (await images.renderRegion(game, self, region)).tradeTraffic?.find(
-    (row) => row.id === ships[0].id(),
-  )?.affiliation,
+  (
+    await images.renderRegion(game, self, region, { tradeShips: true })
+  ).tradeTraffic?.find((row) => row.id === ships[0].id())?.affiliation,
   "other",
 );
 for (let index = 0; index < 18; index++) {
@@ -264,7 +261,9 @@ for (let index = 0; index < 18; index++) {
   );
   ship.setTargetUnit(ports[0]);
 }
-const dense = await images.renderRegion(game, self, region);
+const dense = await images.renderRegion(game, self, region, {
+  tradeShips: true,
+});
 assert.equal(dense.tradeTraffic?.length, 12);
 const artifact = resolve(".agent-arena/synthetic-coast-naval-vision-e2e.json");
 const fixturePng = resolve(".agent-arena/synthetic-coast-public-trade.png");
