@@ -78,7 +78,10 @@ export class TurnQueue {
       this.active.size < this.concurrency
     ) {
       const player = this.pending.shift()!;
-      if (!this.eligible(player.id)) continue;
+      if (!this.eligible(player.id)) {
+        this.pending.push(player);
+        continue;
+      }
       if (player.nextAt > Date.now()) {
         this.pending.push(player);
         continue;

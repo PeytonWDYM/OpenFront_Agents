@@ -2,6 +2,7 @@ import { z } from "zod";
 import { UnitType } from "../core/game/Game";
 import { CodexRuntime, type GameToolResult } from "./codex/index";
 import { tokenUsage } from "./codex/protocol";
+import { recoveryAction, type RecoveryAction } from "./codex/recovery";
 import { EventLog } from "./EventLog";
 import { submitActions } from "./game/actionBatch";
 import { matchSettingsPrompt } from "./game/config";
@@ -104,6 +105,12 @@ export const ThinkQuerySchema = z
   .strict();
 const message = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
+const RECOVERY_DELAY_MS = 10_000;
+const MAX_RECOVERY_ATTEMPTS = 3;
+type PendingRecovery = {
+  action: Extract<RecoveryAction, "retry" | "replace">;
+  nextAt: number;
+};
 
 export class Arena {
   private state: ArenaSnapshot = {
@@ -124,6 +131,13 @@ export class Arena {
   private readonly decisionSummaries = new Map<string, string>();
   private readonly overviewAt = new Map<string, number>();
   private readonly halted = new Set<string>();
+  private readonly recoveries = new Map<string, PendingRecovery>();
+  private readonly recoveryAttempts = new Map<string, number>();
+  private readonly resumableFailures = new Set<string>();
+  private readonly threadUsage = new Map<
+    string,
+    z.infer<typeof tokenUsage>["tokenUsage"]["total"]
+  >();
 
   snapshot(): ArenaSnapshot {
     this.syncPlayers();
@@ -151,6 +165,10 @@ export class Arena {
     this.strategyNotes.clear();
     this.decisionSummaries.clear();
     this.overviewAt.clear();
+    this.recoveries.clear();
+    this.recoveryAttempts.clear();
+    this.resumableFailures.clear();
+    this.threadUsage.clear();
     this.state = {
       phase: "idle",
       gameId: null,
@@ -229,7 +247,8 @@ export class Arena {
                 },
               ],
             },
-            (name, args) => this.tool(player.id, name, args),
+            (name, args, isActive) =>
+              this.tool(player.id, name, args, isActive),
             (event) => this.runtimeEvent(player, event),
           );
           this.logs.add(player.id, "thread", player.threadId);
@@ -240,7 +259,7 @@ export class Arena {
         (id) =>
           this.state.phase === "running" &&
           this.player(id).alive &&
-          !this.player(id).error,
+          (!this.player(id).error || this.recoveries.has(id)),
         (id) => this.decide(id),
       );
       this.state.phase = "lobby";
@@ -282,13 +301,30 @@ export class Arena {
   resume() {
     if (this.state.phase !== "paused")
       throw new Error("Pause the arena before resuming.");
-    this.state.phase = "running";
-    delete this.state.error;
+    if (this.state.runtime.error)
+      throw new Error(
+        "The Codex runtime is unavailable. Stop the arena and create a new lobby.",
+      );
     for (const player of this.state.players) {
       if (
         player.error &&
-        /quota|rate.limit|usage.limit|exhaust/i.test(player.error)
-      ) {
+        !this.recoveries.has(player.id) &&
+        !this.resumableFailures.has(player.id) &&
+        ["placement", "waiting", "review"].includes(
+          this.game!.spawnReview(player.id).stage,
+        )
+      )
+        throw new Error(
+          this.state.error ??
+            `${player.name} cannot complete spawn readiness: ${player.error}`,
+        );
+    }
+    this.state.phase = "running";
+    delete this.state.error;
+    for (const player of this.state.players) {
+      const recovery = this.recoveries.get(player.id);
+      if (recovery) recovery.nextAt = Date.now() + RECOVERY_DELAY_MS;
+      if (this.resumableFailures.delete(player.id)) {
         delete player.error;
         player.status = "ready";
       }
@@ -299,6 +335,7 @@ export class Arena {
 
   async stop() {
     this.halt("stopped");
+    this.recoveries.clear();
     await this.interruptActive();
     await this.queue?.drain();
     await this.closeResources();
@@ -366,6 +403,7 @@ export class Arena {
       if (!native.alive && player.status !== "eliminated") {
         player.status = "eliminated";
         this.halted.add(player.id);
+        this.recoveries.delete(player.id);
         if (this.runtime && player.threadId)
           void this.runtime.interrupt(player.threadId).catch(() => {});
       }
@@ -376,13 +414,18 @@ export class Arena {
     id: string,
     name: string,
     args: unknown,
+    isActive?: () => boolean,
   ): Promise<GameToolResult> {
-    if (
-      this.state.phase !== "running" ||
-      this.halted.has(id) ||
-      !this.player(id).alive
-    )
-      throw new Error("This player's decisions have stopped.");
+    const requireActive = () => {
+      if (
+        this.state.phase !== "running" ||
+        this.halted.has(id) ||
+        !this.player(id).alive ||
+        (isActive && !isActive())
+      )
+        throw new Error("This player's decisions have stopped.");
+    };
+    requireActive();
     let observationQuery: z.infer<typeof ObserveWorldQuerySchema> | undefined;
     if (name === "think") {
       const { note, observe } = ThinkQuerySchema.parse(args);
@@ -507,6 +550,7 @@ export class Arena {
               portSites,
               resolution,
             );
+      requireActive();
       this.logs.add(
         id,
         "vision",
@@ -533,13 +577,16 @@ export class Arena {
       const result = await submitActions(
         args,
         async (intent, attackRatio) => {
+          requireActive();
           const result = await this.game!.act(id, intent, attackRatio);
+          requireActive();
           const player = this.player(id);
           player.lastAction = JSON.stringify(result.intent);
           this.logs.add(id, "action", `Submitted ${player.lastAction}`, result);
           return result;
         },
         (nextDecisionSeconds) => {
+          requireActive();
           this.requestedDelays.set(id, nextDecisionSeconds * 1_000);
           this.logs.add(
             id,
@@ -578,11 +625,33 @@ export class Arena {
     this.syncPlayers();
     const player = this.player(id);
     if (!player.alive) return;
-    this.halted.delete(id);
-    player.status = "thinking";
+    const recovery = this.recoveries.get(id);
+    if (player.error && !recovery) return;
+    if (recovery && recovery.nextAt > Date.now())
+      return recovery.nextAt - Date.now();
     let timeout: ReturnType<typeof setTimeout> | undefined;
     let reviewTurn = false;
+    let completed = false;
     try {
+      if (recovery) {
+        this.logs.add(
+          id,
+          "recovery",
+          `Recovery attempt ${this.recoveryAttempts.get(id)} of ${MAX_RECOVERY_ATTEMPTS}.`,
+        );
+        if (recovery.action === "replace") {
+          player.threadId = await this.runtime!.replacePlayer(player.threadId!);
+          recovery.action = "retry";
+          this.logs.add(id, "thread", player.threadId);
+          this.suppliedTicks.delete(id);
+          this.overviewAt.delete(id);
+        }
+        if (this.state.phase !== "running" || !player.alive) return;
+        this.recoveries.delete(id);
+        delete player.error;
+      }
+      this.halted.delete(id);
+      player.status = "thinking";
       const observation = this.game!.observe(id);
       const spawnReview = this.game!.spawnReview(id);
       if (
@@ -661,30 +730,87 @@ export class Arena {
         );
       }
       player.decisions++;
+      completed = true;
+      this.recoveryAttempts.delete(id);
       this.logs.add(id, "decision", `Decision ${player.decisions} completed.`);
       return this.requestedDelays.get(id);
     } catch (error) {
-      if (this.state.phase === "running") {
+      if (this.state.phase === "running" && player.alive) {
         player.error = message(error);
         this.logs.add(id, "error", player.error);
-        this.state.error = player.error;
-        this.halt(
-          /quota|rate.limit|usage.limit|exhaust/i.test(player.error)
-            ? "paused"
-            : "error",
+        this.halted.add(id);
+        const action = recoveryAction(error);
+        const attempts = (this.recoveryAttempts.get(id) ?? 0) + 1;
+        if (
+          (action === "retry" || action === "replace") &&
+          attempts <= MAX_RECOVERY_ATTEMPTS
+        ) {
+          this.recoveryAttempts.set(id, attempts);
+          // A failed replacement still needs a new session on its next attempt.
+          this.recoveries.set(id, {
+            action: recovery?.action === "replace" ? "replace" : action,
+            nextAt: Date.now() + RECOVERY_DELAY_MS,
+          });
+          this.logs.add(
+            id,
+            "recovery",
+            "This agent will recover in 10 seconds.",
+          );
+          return RECOVERY_DELAY_MS;
+        }
+        this.recoveries.delete(id);
+        this.logs.add(
+          id,
+          "recovery",
+          attempts > MAX_RECOVERY_ATTEMPTS
+            ? "Recovery stopped after three attempts."
+            : "Automatic recovery is unavailable for this error.",
         );
-        void this.interruptActive();
+        if (action === "pause") {
+          this.resumableFailures.add(id);
+          this.state.error = player.error;
+          this.halt("paused");
+          void this.interruptActive();
+        } else {
+          const stage = this.game!.spawnReview(id).stage;
+          if (
+            stage === "placement" ||
+            stage === "waiting" ||
+            stage === "review"
+          ) {
+            this.state.error = `${player.name} cannot complete spawn ${stage}: ${player.error}`;
+            this.halt("paused");
+            void this.interruptActive();
+          }
+        }
       }
     } finally {
       clearTimeout(timeout);
-      if (reviewTurn && this.state.phase === "running")
+      if (reviewTurn && completed && this.state.phase === "running")
         this.game!.confirmSpawn(id);
       this.requestedDelays.delete(id);
-      if (player.alive) player.status = player.error ? "error" : "ready";
+      if (player.alive)
+        player.status = this.recoveries.has(id)
+          ? "recovering"
+          : player.error
+            ? "error"
+            : "ready";
     }
   }
 
   private runtimeEvent(player: AgentPlayer, event: Record<string, unknown>) {
+    if (
+      event.type === "runtime_error" &&
+      (this.state.phase === "running" || this.state.phase === "paused")
+    ) {
+      player.error = String(event.message);
+      player.status = "error";
+      this.recoveries.clear();
+      this.state.error = String(event.message);
+      this.state.runtime.error = this.state.error;
+      this.halt("paused");
+      void this.interruptActive();
+    }
     if (event.method === "item/completed") {
       const finalMessage = z
         .object({
@@ -714,9 +840,24 @@ export class Arena {
     if (event.type !== "tokens") return;
     const { totalTokens, ...usage } =
       tokenUsage.shape.tokenUsage.shape.total.parse(event);
-    const delta = Math.max(0, totalTokens - player.tokens);
+    const threadId =
+      typeof event.threadId === "string" ? event.threadId : player.threadId!;
+    const previous = this.threadUsage.get(threadId);
+    const delta = Math.max(0, totalTokens - (previous?.totalTokens ?? 0));
+    this.threadUsage.set(threadId, { totalTokens, ...usage });
     player.tokens += delta;
-    player.tokenUsage = usage;
+    player.tokenUsage ??= {
+      inputTokens: 0,
+      cachedInputTokens: 0,
+      cacheWriteInputTokens: 0,
+      outputTokens: 0,
+      reasoningOutputTokens: 0,
+    };
+    for (const key of Object.keys(usage) as (keyof typeof usage)[])
+      player.tokenUsage[key] += Math.max(
+        0,
+        usage[key] - (previous?.[key] ?? 0),
+      );
     this.state.totalTokens += delta;
     this.state.tokenUsage = this.state.players.reduce(
       (combined, seat) => {
