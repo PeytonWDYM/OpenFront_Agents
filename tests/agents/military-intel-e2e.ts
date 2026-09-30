@@ -3,6 +3,9 @@
 // posts stack bonuses, own silos become inbound threats, or detail grows unbounded.
 // Compression failures: a large cluster hides a distant cluster, matching only
 // the first 32 unit IDs merges different blast footprints, or coverage moves.
+// Missile budget failures: gold does not limit idle slots, slots do not limit
+// rich players, zero-cost weapons divide by zero, disabled weapons appear,
+// construction provides launch slots, or truncated silo details limit totals.
 import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
 import { militaryIntel } from "../../src/agents/game/militaryIntel";
@@ -154,6 +157,72 @@ assert.equal(boundedIntel.defensePosts.totalUnits, 42);
 assert.equal(boundedIntel.inboundMissiles.length, 32);
 assert.equal(boundedIntel.inboundMissilesTotal, 43);
 assert.equal(boundedIntel.infrastructureConcentration.centers.length, 12);
+assert.ok(
+  "missileBudget" in boundedIntel,
+  "Expose current funded launch slots",
+);
+assert.equal(
+  boundedIntel.missileBudget.basis,
+  "Upper bounds from current gold and ready slots, per weapon independently. No other spending or target legality included.",
+);
+assert.deepEqual(
+  boundedIntel.missileBudget.options,
+  [UnitType.AtomBomb, UnitType.HydrogenBomb, UnitType.MIRV].map((type) => ({
+    type,
+    cost: 0,
+    fundedReadyShots: 41,
+  })),
+  "Infinite gold uses all ready slots, including silos beyond the detail limit",
+);
+const budgetGame = await setup(
+  "plains",
+  { disabledUnits: [UnitType.HydrogenBomb], instantBuild: true },
+  [new PlayerInfo("self", PlayerType.Human, "self", "self")],
+);
+const budgetPlayer = budgetGame.player("self");
+budgetPlayer.setSpawnTile(budgetGame.ref(10, 10));
+budgetPlayer.conquer(budgetGame.ref(10, 10));
+budgetPlayer.addGold(100_000_000n);
+const budgetSilos = Array.from({ length: 35 }, (_, index) =>
+  budgetPlayer.buildUnit(
+    UnitType.MissileSilo,
+    budgetGame.ref(10 + index, 10),
+    {},
+  ),
+);
+const constructingSilo = budgetPlayer.buildUnit(
+  UnitType.MissileSilo,
+  budgetGame.ref(80, 80),
+  {},
+);
+constructingSilo.setUnderConstruction(true);
+const atomCost = budgetGame
+  .unitInfo(UnitType.AtomBomb)
+  .cost(budgetGame, budgetPlayer);
+budgetPlayer.removeGold(budgetPlayer.gold() - (atomCost * 3n + atomCost / 2n));
+const lowGoldIntel = militaryIntel(budgetGame, budgetPlayer);
+assert.equal(lowGoldIntel.missileSilos.length, 32);
+assert.equal(lowGoldIntel.siloReadiness.readySlots, 35);
+assert.deepEqual(
+  lowGoldIntel.missileBudget.options,
+  [UnitType.AtomBomb, UnitType.MIRV].map((type) => ({
+    type,
+    cost: Number(budgetGame.unitInfo(type).cost(budgetGame, budgetPlayer)),
+    fundedReadyShots: type === UnitType.AtomBomb ? 3 : 0,
+  })),
+  "Current gold limits shots and disabled Hydrogen weapons stay absent",
+);
+for (const unit of budgetSilos.slice(0, 33)) unit.delete(false);
+budgetPlayer.addGold(100_000_000n);
+const richGoldIntel = militaryIntel(budgetGame, budgetPlayer);
+assert.equal(richGoldIntel.siloReadiness.readySlots, 2);
+assert.equal(richGoldIntel.siloReadiness.underConstructionUnits, 1);
+assert.ok(
+  richGoldIntel.missileBudget.options.every(
+    (option) => option.fundedReadyShots === 2,
+  ),
+  "Ready completed slots limit rich players",
+);
 const image = await new MapImages("military-intel-e2e").renderNukePreview(
   game,
   self,
@@ -274,6 +343,11 @@ await writeFile(
       intel,
       threatIntel,
       boundedIntel,
+      missileBudgetBounds: {
+        infiniteGold: boundedIntel.missileBudget,
+        lowGold: lowGoldIntel.missileBudget,
+        richGold: richGoldIntel.missileBudget,
+      },
       clusterIntel,
       fullFootprintIntel,
       image,

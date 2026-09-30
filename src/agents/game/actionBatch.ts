@@ -10,19 +10,18 @@ type SubmitAction = (
 
 function batchWarnings(intents: AgentAction[]) {
   const warnings: string[] = [];
-  const builds = intents
-    .filter((intent) => intent.type === "build_unit")
-    .filter((intent) => Structures.has(intent.unit));
+  const builds = intents.filter((intent) => intent.type === "build_unit");
   if (
     builds.length &&
     intents.some((intent) => intent.type === "upgrade_structure")
   )
     warnings.push(
-      "Native upgrades spend gold before new construction ticks, regardless of array order. Shared costs can leave later work unaffordable.",
+      "Native upgrades spend gold during initialization before missile launches and new construction ticks, regardless of array order. Shared upgrade, missile launch, and other build costs can leave later work unaffordable.",
     );
+  const structures = builds.filter((intent) => Structures.has(intent.unit));
   const tiles = new Set<number>();
   if (
-    builds.some((intent) => {
+    structures.some((intent) => {
       const duplicate = tiles.has(intent.tile);
       tiles.add(intent.tile);
       return duplicate;
