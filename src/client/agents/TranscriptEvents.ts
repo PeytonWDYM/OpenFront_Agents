@@ -11,6 +11,7 @@ export interface TranscriptEntry {
 }
 
 function decisionPreview(event: PlayerEvent): string | undefined {
+  if (event.image) return translateText("agents.vision_image");
   if (event.type === "action") {
     const intent = JSON.parse(event.text.slice("Submitted ".length)) as Intent;
     switch (intent.type) {
@@ -90,9 +91,11 @@ export function transcriptEntries(
           : translateText(
               event.type === "action"
                 ? "agents.event_action"
-                : event.type === "error" || event.type === "tool_error"
-                  ? "agents.event_error"
-                  : "agents.event_decision",
+                : event.image
+                  ? "agents.event_vision"
+                  : event.type === "error" || event.type === "tool_error"
+                    ? "agents.event_error"
+                    : "agents.event_decision",
             ),
       },
     ];

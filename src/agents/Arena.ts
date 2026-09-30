@@ -16,6 +16,7 @@ import {
   quickChatKeys,
 } from "./game/schemas";
 import { playerPrompt } from "./PlayerPrompt";
+import { getAgentReasoningEffort } from "./Reasoning";
 import { scriptedAction } from "./ScriptedPlayer";
 import { ArenaSettingsSchema, defaultSettings } from "./Settings";
 import { TurnQueue } from "./TurnQueue";
@@ -99,6 +100,7 @@ export class Arena {
   private readonly suppliedTicks = new Map<string, number>();
   private readonly requestedDelays = new Map<string, number>();
   private readonly strategyNotes = new Map<string, string>();
+  private readonly decisionSummaries = new Map<string, string>();
   private readonly overviewAt = new Map<string, number>();
   private readonly halted = new Set<string>();
 
@@ -126,6 +128,7 @@ export class Arena {
     this.halted.clear();
     this.suppliedTicks.clear();
     this.strategyNotes.clear();
+    this.decisionSummaries.clear();
     this.overviewAt.clear();
     this.state = {
       phase: "idle",
@@ -148,16 +151,21 @@ export class Arena {
       }
       this.game = new AgentGame({
         agentCount: settings.agentCount,
+        mediumAgentCount: settings.mediumAgentCount,
         tribeCount: settings.tribeCount,
         nationCount: settings.nationCount,
         onEvent: (event) => this.gameEvent(event),
       });
       const lobby = await this.game.create();
       this.state.gameId = lobby.gameId;
-      this.state.players = this.game.players().map((player) => ({
+      this.state.players = this.game.players().map((player, index) => ({
         id: player.id,
         clientId: player.clientId,
         name: player.name,
+        reasoningEffort: getAgentReasoningEffort(
+          index,
+          settings.mediumAgentCount,
+        ),
         alive: true,
         threadId: null,
         tokens: 0,
@@ -178,6 +186,7 @@ export class Arena {
           player.threadId = await this.runtime.createPlayer(
             {
               id: player.id,
+              reasoningEffort: player.reasoningEffort,
               prompt,
               tools: [
                 {
@@ -509,6 +518,7 @@ export class Arena {
         player.status = "waiting";
         return 500;
       }
+      const decisionFeedback = this.game!.decisionFeedback(id);
       if (this.state.settings.mode === "scripted") {
         const action = scriptedAction(observation);
         if (!action) return 500;
@@ -542,6 +552,10 @@ export class Arena {
         this.suppliedTicks.set(id, observation.tick);
         const text = JSON.stringify({
           ...projectDecisionObservation(observation),
+          decisionFeedback,
+          ...(this.decisionSummaries.has(id)
+            ? { previousDecisionSummary: this.decisionSummaries.get(id) }
+            : {}),
           ...(this.strategyNotes.has(id)
             ? { strategyNote: this.strategyNotes.get(id) }
             : {}),
@@ -558,7 +572,7 @@ export class Arena {
         }, 90_000);
         await this.runtime!.turn(
           player.threadId!,
-          `Use this current state and map. The offense summary shows legal attacks, landings, and affordable missiles alongside construction options; weigh them against expansion and defense, keeping in mind that idle economy tends to lose ground to expanding rivals. Choose useful actions: ${text}`,
+          `Current game state and your previous decision summary follow. Choose your next actions: ${text}`,
           frames,
         );
       }
@@ -585,6 +599,22 @@ export class Arena {
   }
 
   private runtimeEvent(player: AgentPlayer, event: Record<string, unknown>) {
+    if (event.method === "item/completed") {
+      const finalMessage = z
+        .object({
+          item: z.object({
+            type: z.literal("agentMessage"),
+            phase: z.literal("final_answer"),
+            text: z.string(),
+          }),
+        })
+        .safeParse(event.params);
+      if (finalMessage.success)
+        this.decisionSummaries.set(
+          player.id,
+          finalMessage.data.item.text.slice(0, 600),
+        );
+    }
     this.logs.add(
       player.id,
       typeof event.type === "string"

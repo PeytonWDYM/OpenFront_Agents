@@ -378,13 +378,20 @@ export const agentPanelStyles = css`
   .event-details summary {
     color: #98b2c6;
   }
-  .vision-image {
-    display: block;
+  .vision-preview {
     width: 100%;
-    height: auto;
+    aspect-ratio: 4 / 3;
     margin-top: 8px;
     border: 1px solid #ffffff24;
     border-radius: 4px;
+    overflow: hidden;
+    background: #14202b;
+  }
+  .vision-image {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
   }
   pre {
     max-height: 360px;

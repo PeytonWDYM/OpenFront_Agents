@@ -8,6 +8,7 @@ export type ArenaPhase =
 
 export interface ArenaSettings {
   agentCount: number;
+  mediumAgentCount: number;
   tribeCount: number;
   nationCount: number;
   mode: "codex" | "scripted";
@@ -26,10 +27,13 @@ export interface AgentTokenUsage {
   reasoningOutputTokens: number;
 }
 
+export type AgentReasoningEffort = "low" | "medium";
+
 export interface AgentPlayer {
   id: string;
   clientId: string;
   name: string;
+  reasoningEffort: AgentReasoningEffort;
   threadId: string | null;
   status: string;
   alive: boolean;

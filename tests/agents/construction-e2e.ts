@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
 import { AgentGame } from "../../src/agents/game/AgentGame";
 import { projectDecisionObservation } from "../../src/agents/game/decision";
+import { DecisionFeedback } from "../../src/agents/game/feedback";
 import { LocalMapLoader } from "../../src/agents/game/LocalMapLoader";
 import { ObservationBuilder } from "../../src/agents/game/observation";
 import {
@@ -75,6 +76,7 @@ advance(203);
 const self = game.playerByClientID(clientID)!;
 const bridge = new AgentGame({ agentCount: 1, tribeCount: 0, nationCount: 0 });
 Reflect.set(bridge, "runner", runner);
+Reflect.set(bridge, "feedback", new DecisionFeedback(game));
 Reflect.set(bridge, "attackRatios", new Map([["agent001", 0.2]]));
 // The fixture transport feeds submitted intents to the real native runner.
 Reflect.set(bridge, "seats", [

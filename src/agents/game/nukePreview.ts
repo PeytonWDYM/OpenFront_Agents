@@ -4,7 +4,7 @@ import {
   listNukeBreakAlliance,
   wouldNukeBreakAlliance,
 } from "../../core/execution/Util";
-import { Game, Player, UnitType } from "../../core/game/Game";
+import { Game, Player, Structures, UnitType } from "../../core/game/Game";
 
 export const NukePreviewRequestSchema = z
   .object({
@@ -70,6 +70,34 @@ export function buildNukePreview(
   const config = game.config();
   const rocketDirectionUp = request.rocketDirectionUp ?? true;
   const blast = config.nukeMagnitudes(request.type);
+  const targetingSelf = game.owner(request.tile) === player;
+  // Native detonation removes structures strictly inside the outer radius.
+  // These are current-state risks. Ownership and interception can change in flight.
+  const structuresAtRisk = game
+    .units()
+    .filter(
+      (unit) =>
+        Structures.has(unit.type()) &&
+        unit.isActive() &&
+        game.euclideanDistSquared(request.tile, unit.tile()) < blast.outer ** 2,
+    );
+  const ownStructuresAtRisk = [];
+  const friendlyStructuresAtRisk = [];
+  for (const unit of structuresAtRisk) {
+    const owner = unit.owner();
+    const structure = {
+      unitId: unit.id(),
+      type: unit.type(),
+      level: unit.level(),
+      tile: unit.tile(),
+      x: game.x(unit.tile()),
+      y: game.y(unit.tile()),
+      playerId: owner.id(),
+    };
+    if (owner === player) ownStructuresAtRisk.push(structure);
+    else if (player.isOnSameTeam(owner) || player.isAlliedWith(owner))
+      friendlyStructuresAtRisk.push(structure);
+  }
   const allies = player.allies();
   const affected = allies.length
     ? listNukeBreakAlliance({
@@ -130,7 +158,11 @@ export function buildNukePreview(
     target,
     source,
     blast,
-    canBuild: player.canBuild(request.type, request.tile) !== false,
+    canBuild:
+      !targetingSelf && player.canBuild(request.type, request.tile) !== false,
+    targetingSelf,
+    ownStructuresAtRisk,
+    friendlyStructuresAtRisk,
     betrayedAllyIds: allies
       .filter((ally) => betrayed.has(ally.smallID()))
       .map((ally) => ally.id()),

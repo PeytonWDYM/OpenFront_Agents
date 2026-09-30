@@ -46,6 +46,10 @@ export class ObservationBuilder {
     }
   }
 
+  recordIncome(): void {
+    this.stats.recordIncome();
+  }
+
   observe(
     id: string,
     player: Player,
@@ -91,6 +95,7 @@ export class ObservationBuilder {
         event.data.otherPlayerId ??
         event.data.requestor ??
         event.data.attackerId ??
+        event.data.captorId ??
         event.data.sender;
       if (typeof other === "string") relevant.add(other);
     }
@@ -187,6 +192,26 @@ export class ObservationBuilder {
         });
       }
       if (buildSites.length >= 8) break;
+    }
+    // A legal coastal site can be absent from the small general land sample.
+    if (
+      !requestedSites &&
+      !buildSites.some((site) => site.type === UnitType.Port)
+    ) {
+      const cost = Number(game.unitInfo(UnitType.Port).cost(game, player));
+      if (Number(player.gold()) >= cost)
+        for (const tile of player.tiles()) {
+          if (!game.isShore(tile)) continue;
+          const site = player.canBuild(UnitType.Port, tile);
+          if (site === false) continue;
+          buildSites.unshift({
+            type: UnitType.Port,
+            tile: site,
+            cost,
+            upgradeId: false,
+          });
+          break;
+        }
     }
     const spawnCandidates: AgentObservation["map"]["spawnCandidates"] = [];
     if (game.inSpawnPhase() && !game.config().isRandomSpawn()) {

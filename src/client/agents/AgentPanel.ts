@@ -361,8 +361,18 @@ export class AgentPanel extends LitElement {
               <div class="header-model">
                 ${translateText(
                   lobby.settings.mode === "codex"
-                    ? "agents.model"
+                    ? selectedPlayer
+                      ? `agents.model_${selectedPlayer.reasoningEffort}`
+                      : "agents.model_mix"
                     : "agents.scripted_mode",
+                  {
+                    low: lobby.players.filter(
+                      (player) => player.reasoningEffort === "low",
+                    ).length,
+                    medium: lobby.players.filter(
+                      (player) => player.reasoningEffort === "medium",
+                    ).length,
+                  },
                 )}
               </div>
               <details class="usage-breakdown">

@@ -9,6 +9,7 @@ import {
   isStructureBuild,
 } from "../../src/agents/game/AgentGame";
 import { projectDecisionObservation } from "../../src/agents/game/decision";
+import { DecisionFeedback } from "../../src/agents/game/feedback";
 import { LocalMapLoader } from "../../src/agents/game/LocalMapLoader";
 import { ObservationBuilder } from "../../src/agents/game/observation";
 import {
@@ -121,6 +122,7 @@ advance(203);
 const self = game.playerByClientID(clientID)!;
 const bridge = new AgentGame({ agentCount: 1, tribeCount: 0, nationCount: 0 });
 Reflect.set(bridge, "runner", runner);
+Reflect.set(bridge, "feedback", new DecisionFeedback(game));
 Reflect.set(bridge, "observations", new ObservationBuilder(game));
 Reflect.set(bridge, "histories", new Map([["agent001", []]]));
 Reflect.set(bridge, "incomingAttacks", new Map([["agent001", new Set()]]));

@@ -29,6 +29,7 @@ export function projectDecisionObservation(
       event.data.otherPlayerId ??
       event.data.requestor ??
       event.data.attackerId ??
+      event.data.captorId ??
       event.data.sender;
     if (typeof other === "string") relevantIds.add(other);
   }
@@ -46,6 +47,7 @@ export function projectDecisionObservation(
     spawnPhase: observation.spawnPhase,
     victory: observation.victory,
     offense: observation.offense,
+    ...(include("self") ? { economy: observation.economy } : {}),
     ...(include("leaderboard")
       ? {
           leaderboard: sections?.includes("leaderboard")

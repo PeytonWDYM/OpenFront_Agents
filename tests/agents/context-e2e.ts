@@ -5,8 +5,8 @@ import { z } from "zod";
 import { CodexRuntime } from "../../src/agents/codex";
 
 // Failure cases: ignored native context flags, a lifetime budget mistaken for context,
-// per-thread overrides lost, coder instructions restored, or the copied login retained.
-// This probe creates an isolated persistent thread and makes no inference request.
+// per-player reasoning overrides lost, coder instructions restored, or the copied login retained.
+// This probe creates isolated low and medium threads without an inference request.
 const runtime = new CodexRuntime();
 const events: Record<string, unknown>[] = [];
 const evidence: Record<string, unknown> = { inferenceRequests: 0 };
@@ -16,7 +16,7 @@ try {
   const isolation = z
     .object({
       contextWindow: z.literal(150_000),
-      autoCompactTokenLimit: z.literal(24_000),
+      autoCompactTokenLimit: z.literal(60_000),
       autoCompactTokenLimitScope: z.literal("total"),
     })
     .parse(
@@ -27,40 +27,48 @@ try {
         ),
       ),
     );
-  const threadId = await runtime.createPlayer(
-    {
-      id: "context-e2e",
-      prompt: "You are an OpenFront game player. Preserve native game history.",
-      tools: [],
-    },
-    async () => {
-      throw new Error("The context probe does not allow inference.");
-    },
-    (event) => events.push(event),
-  );
-  const configuration = z
-    .object({
-      type: z.literal("configuration"),
-      model: z.literal("gpt-6-luna"),
-      effort: z.literal("low"),
-      contextWindow: z.literal(150_000),
-      autoCompactTokenLimit: z.literal(24_000),
-      autoCompactTokenLimitScope: z.literal("total"),
-      instructionSources: z.array(z.string()).length(0),
-    })
-    .parse(events.find((event) => event.type === "configuration"));
-  const metadata = await runtime.history(threadId, false);
-  assert.equal(metadata.ephemeral, false);
-  assert.equal(metadata.model, "gpt-6-luna");
-  assert.equal(metadata.reasoningEffort, "low");
-  assert.deepEqual(metadata.turns, []);
+  const players = [];
+  for (const effort of ["low", "medium"] as const) {
+    const threadId = await runtime.createPlayer(
+      {
+        id: `context-e2e-${effort}`,
+        reasoningEffort: effort,
+        prompt:
+          "You are an OpenFront game player. Preserve native game history.",
+        tools: [],
+      },
+      async () => {
+        throw new Error("The context probe does not allow inference.");
+      },
+      (event) => events.push(event),
+    );
+    const configuration = z
+      .object({
+        type: z.literal("configuration"),
+        model: z.literal("gpt-6-luna"),
+        effort: z.literal(effort),
+        contextWindow: z.literal(150_000),
+        autoCompactTokenLimit: z.literal(60_000),
+        autoCompactTokenLimitScope: z.literal("total"),
+        instructionSources: z.array(z.string()).length(0),
+      })
+      .parse(
+        events.find(
+          (event) => event.type === "configuration" && event.effort === effort,
+        ),
+      );
+    const metadata = await runtime.history(threadId, false);
+    assert.equal(metadata.ephemeral, false);
+    assert.equal(metadata.model, "gpt-6-luna");
+    assert.equal(metadata.reasoningEffort, effort);
+    assert.deepEqual(metadata.turns, []);
+    players.push({ effort, configuration, threadId, persistent: true });
+  }
   Object.assign(evidence, {
     passed: true,
     status,
     isolation,
-    configuration,
-    threadId,
-    persistent: true,
+    players,
   });
 } finally {
   await runtime.close();

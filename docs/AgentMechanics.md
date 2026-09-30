@@ -141,9 +141,14 @@ The spawn briefing explains each major structure and unit without a fixed build 
 
 Nuclear `build_unit` actions use the enemy target tile. The native engine selects the launch silo.
 Build hints preserve that target tile instead of substituting the silo tile returned by the native placement check.
-Agents receive early tribe-conquest guidance, mechanics, and tradeoffs. They choose their own actions and strategy.
+The agent bridge rejects self-owned nuclear destinations. Atom and Hydrogen previews list own and friendly structures inside the native destruction radius.
+An enemy destination can still damage nearby owned structures. The prompt explains this risk without blocking all collateral damage.
+Agents receive mechanics and tradeoffs. They choose their own actions and strategy.
 Each City level adds the same capacity. SAM levels add reload slots, while range gains diminish at higher levels.
 Port levels add trade spawning opportunities. Factory levels add train spawning opportunities. Missile Silo levels add reload slots.
+Factories link nearby City, Port, and Factory stations over valid rail paths. A train needs a reachable trade destination.
+Allied City and Port stops pay more than non-allied stops. An alliance does not directly increase factory production.
+Non-allied stations can trade when neither player embargoes the other.
 Overlapping Defense Posts do not multiply the same tile's bonus. A post covers land within 30 tiles and adds no City capacity.
 Upgrades count toward construction pricing. Current costs and useful coverage determine the tradeoff between upgrades and additional structures.
 

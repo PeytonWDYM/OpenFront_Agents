@@ -29,7 +29,7 @@ The required version remains 0.158.0.
 | `history(threadId, includeTurns)`           | Reads native thread history.                                                |
 | `close()`                                   | Closes the process, saves pending logs, and removes the copied credentials. |
 
-Every player uses `gpt-6-luna` with `low` reasoning. The runtime disables provider model fallback.
+Every player uses `gpt-6-luna` with its assigned `low` or `medium` reasoning level. The runtime disables provider model fallback.
 An unavailable model causes an error. The runtime does not substitute another model.
 A player retains the same thread across game decisions. Concurrent turns on that thread cause an error.
 
@@ -54,11 +54,12 @@ Frame files remain under `.agent-arena/frames/<gameId>` for inspection. Event lo
 
 Full history requires at least one user message. Before that message, use `history(threadId, false)` for thread metadata.
 Native Codex stores persistent sessions in the isolated home. The adapter does not replace native history with a summary buffer.
-Each new runtime sets native `model_context_window` to 150,000 and `model_auto_compact_token_limit` to 24,000, with scope `total`.
+Each new runtime sets native `model_context_window` to 150,000 and `model_auto_compact_token_limit` to 60,000, with scope `total`.
 Initialization verifies these settings through native `config/read`. Each player thread receives the same explicit settings.
 These settings limit active context. They do not limit lifetime tokens or game decisions.
 The earlier threshold bounds repeated history input while preserving the same native thread and compaction summary.
-The arena also resends the player's latest explicit `think` note with the live state. The player can replace this note as its plan changes.
+The arena also resends the player's latest final decision summary and explicit `think` note with the live state.
+The final summary is limited to 600 characters. It preserves the stated objective without another model call.
 Codex handles compaction and persistent history. Manual compaction uses `thread/compact/start`.
 Existing runtimes retain their startup settings. Changing these settings does not change a running match.
 
@@ -68,7 +69,7 @@ The player prompt goes into `thread/start.baseInstructions`. Codex treats this f
 It replaces the default coder prompt. It does not grant permission to bypass model safety controls.
 The thread uses empty developer instructions, no environments, no capability roots, and a read-only sandbox.
 The runtime disables permission, app, collaboration, environment, and skill instruction blocks.
-The thread response must confirm `gpt-6-luna`, `low`, `readOnly`, `never`, and an empty instruction source list.
+The thread response must confirm `gpt-6-luna`, the assigned reasoning level, `readOnly`, `never`, and an empty instruction source list.
 
 The local model catalog supplies game-only tool declarations.
 The runtime copies model metadata from the existing catalog and keeps its context limits.
@@ -76,7 +77,7 @@ It removes native shell, patch, clock, user-message, code mode, and multi-agent 
 This uses Codex's supported `model_catalog_json` setting. It does not change the remote model or provider.
 All player tools use app-server `dynamicTools` with direct function exposure.
 Players receive `observe_world`, `act`, and `think`. The `think` tool records a short strategy summary and can request a focused observation.
-It shares the same observation filters. It does not change low reasoning or submit game actions.
+It shares the same observation filters. It does not change the assigned reasoning level or submit game actions.
 There is no fixed tool-call or action-count quota. A 90-second deadline interrupts stalled decisions.
 Tool arguments arrive as `unknown`. The game bridge must validate arguments against its game contracts.
 Unknown tools and callback errors return failed tool results.
@@ -143,7 +144,7 @@ Write and inspect these checks before runtime implementation:
 
 - Codex is missing, or its version differs from the verified protocol.
 - The account lacks ChatGPT authentication.
-- The catalog lacks `gpt-6-luna` or its `low` reasoning option.
+- The catalog lacks `gpt-6-luna` or its `low` and `medium` reasoning options.
 - Codex substitutes another model or reasoning effort.
 - Native context settings are ignored, or thread creation loses the 150,000-token configuration.
 - A context window incorrectly becomes a lifetime token or decision budget.

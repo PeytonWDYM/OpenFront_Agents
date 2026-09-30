@@ -9,6 +9,7 @@ import { EFFORT, MODEL } from "../../src/agents/codex/config";
 import type { GameToolResult } from "../../src/agents/codex/index";
 import { validateToolSchemas } from "../../src/agents/codex/toolSchema";
 import { AgentGame } from "../../src/agents/game/AgentGame";
+import { DecisionFeedback } from "../../src/agents/game/feedback";
 import { LocalMapLoader } from "../../src/agents/game/LocalMapLoader";
 import { ObservationBuilder } from "../../src/agents/game/observation";
 import type { AgentEvent } from "../../src/agents/game/schemas";
@@ -95,6 +96,7 @@ Reflect.set(game, "seats", [
   { id: "agent002", clientId: "think002", name: "Think Two" },
 ]);
 Reflect.set(game, "runner", runner);
+Reflect.set(game, "feedback", new DecisionFeedback(runner.game));
 Reflect.set(game, "observations", new ObservationBuilder(runner.game));
 Reflect.set(game, "gameId_", "agentThinkE2E");
 Reflect.set(game, "mapImages", new MapImages("agentThinkE2E"));

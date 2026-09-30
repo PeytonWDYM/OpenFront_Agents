@@ -51,6 +51,22 @@ export function playerEvents(
   }
   for (const event of updates[U.DisplayEvent]) {
     if (event.playerID === null || event.playerID === self) {
+      if (
+        event.playerID === self &&
+        event.message === "events_display.trade_ship_captured"
+      ) {
+        const ship =
+          event.unitID === undefined ? undefined : game.unit(event.unitID);
+        add("trade_ship_captured", {
+          unitId: event.unitID,
+          captorId:
+            event.focusPlayerID === undefined
+              ? undefined
+              : playerId(event.focusPlayerID),
+          ...(ship ? { tile: ship.tile() } : {}),
+        });
+        continue;
+      }
       add(
         event.messageType === MessageType.NUKE_DETONATED
           ? "nuke_impact"

@@ -188,6 +188,7 @@ export interface AgentEvent {
     | "alliance_extended"
     | "alliance_extension_request"
     | "unit_incoming"
+    | "trade_ship_captured"
     | "nuke_incoming"
     | "nuke_impact"
     | "eliminated"

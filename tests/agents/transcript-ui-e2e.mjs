@@ -1,6 +1,7 @@
 // Browser failure cases: incoming dumps hide decisions, polls move the reader,
 // new events fail to follow at the bottom, retained rows lose expanded details,
-// and the panel changes height as its history grows.
+// the panel changes height as its history grows, map images require diagnostics,
+// and delayed image loads move the reader or stop following the latest event.
 // Run against Vite: OPENFRONT_URL=http://localhost:9000 node tests/agents/transcript-ui-e2e.mjs
 // PLAYWRIGHT_PACKAGE can point to a bundled Playwright package without repo installation.
 import assert from "node:assert/strict";
@@ -23,6 +24,7 @@ const player = {
   name: "Reader",
   threadId: "thread-reader",
   status: "ready",
+  reasoningEffort: "low",
   alive: true,
   tokens: 1200,
   decisions: 30,
@@ -32,6 +34,27 @@ const events = Array.from({ length: 35 }, (_, index) => ({
   type: "think",
   text: `Decision note ${index}: advance along the coast.`,
 }));
+events.splice(4, 0, {
+  time: 1_800_000_000_004,
+  type: "vision",
+  text: "Requested coastal map region.",
+  image: `${baseUrl}/delayed-map.svg`,
+});
+const imageGates = new Map();
+for (const image of ["delayed-map.svg", "delayed-latest-map.svg"]) {
+  let release;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  imageGates.set(image, release);
+  await page.route(`**/${image}`, async (route) => {
+    await gate;
+    await route.fulfill({
+      contentType: "image/svg+xml",
+      body: '<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="240" viewBox="0 0 1000 240"><rect width="1000" height="240" fill="#245277"/><path d="M0 0H750L690 100L550 110L450 220H0Z" fill="#668b49"/><path d="M0 0H270L370 100L240 240H0Z" fill="#ac7060"/><text x="35" y="55" fill="white" font-size="30">Coastal map</text></svg>',
+    });
+  });
+}
 events.push({
   time: 1_800_000_000_050,
   type: "observation",
@@ -61,7 +84,13 @@ const lobby = {
   phase: "running",
   gameId: "reader-game",
   players: [player],
-  settings: { agentCount: 1, tribeCount: 0, nationCount: 0, mode: "codex" },
+  settings: {
+    agentCount: 1,
+    mediumAgentCount: 0,
+    tribeCount: 0,
+    nationCount: 0,
+    mode: "codex",
+  },
   runtime: { authenticated: true, models: [] },
   totalTokens: 1200,
 };
@@ -104,6 +133,29 @@ try {
       panelHeight: element.parentElement.getBoundingClientRect().height,
     }));
   const first = await snapshot();
+  const mapImage = page.locator("agent-panel .vision-image");
+  assert.equal(
+    await mapImage.count(),
+    1,
+    "Map images appear without diagnostics",
+  );
+  assert.equal(
+    await mapImage.evaluate((image) => image.closest("details") === null),
+    true,
+    "Map images appear outside collapsed details",
+  );
+  assert.ok(
+    await mapImage.isVisible(),
+    "Map image preview is visible in the default view",
+  );
+  const mapFrame = await mapImage.evaluate((image) => ({
+    width: image.clientWidth,
+    height: image.clientHeight,
+  }));
+  assert.ok(
+    mapFrame.width > 250 && mapFrame.height > 150 && mapFrame.height < 300,
+    "Map preview reserves a readable bounded frame before loading",
+  );
   assert.ok(
     !first.text.includes("incoming-observation-dump"),
     "Default view hides incoming data",
@@ -168,6 +220,30 @@ try {
     true,
     "Polling keeps event details open",
   );
+  await mapImage.scrollIntoViewIfNeeded();
+  await body.evaluate((element) => {
+    element.scrollTop = 1000;
+    element.dispatchEvent(new Event("scroll"));
+  });
+  const imageReading = await snapshot();
+  imageGates.get("delayed-map.svg")();
+  await page.waitForFunction(
+    () =>
+      document
+        .querySelector("agent-panel")
+        .shadowRoot.querySelector(".vision-image").naturalWidth > 0,
+  );
+  const imageLoaded = await snapshot();
+  assert.equal(
+    imageLoaded.top,
+    imageReading.top,
+    "Delayed map loading preserves the reading position",
+  );
+  assert.equal(
+    imageLoaded.height,
+    imageReading.height,
+    "Delayed map loading preserves the reserved layout",
+  );
   // Simulate the backend's retained history window, then verify the same visible note stays put.
   const beforeTrim = await page
     .locator("agent-panel .transcript-event")
@@ -206,6 +282,41 @@ try {
     latest.height - latest.viewport - latest.top < 3,
     "Latest resumes following",
   );
+  events.push({
+    time: 1_800_000_000_200,
+    type: "vision",
+    text: "Latest coastal map region.",
+    image: `${baseUrl}/delayed-latest-map.svg`,
+  });
+  await page.evaluate(async () => {
+    await document.querySelector("agent-panel").refresh();
+  });
+  const imageFollowing = await snapshot();
+  assert.ok(
+    imageFollowing.height - imageFollowing.viewport - imageFollowing.top < 3,
+    "New map image follows at the bottom before loading",
+  );
+  imageGates.get("delayed-latest-map.svg")();
+  await page.waitForFunction(() =>
+    [
+      ...document
+        .querySelector("agent-panel")
+        .shadowRoot.querySelectorAll(".vision-image"),
+    ].every((image) => image.naturalWidth > 0),
+  );
+  const latestImageLoaded = await snapshot();
+  assert.ok(
+    latestImageLoaded.height -
+      latestImageLoaded.viewport -
+      latestImageLoaded.top <
+      3,
+    "Delayed latest map loading keeps the bottom in view",
+  );
+  assert.equal(
+    latestImageLoaded.height,
+    imageFollowing.height,
+    "Wide image fits its reserved frame",
+  );
   await page.getByRole("checkbox", { name: "Show diagnostics" }).check();
   assert.ok(
     (await snapshot()).text.includes("incoming-observation-dump"),
@@ -219,7 +330,7 @@ try {
     JSON.stringify(
       {
         passed: true,
-        checks: 13,
+        checks: 22,
         first,
         followed,
         reading,
@@ -227,6 +338,11 @@ try {
         beforeTrim,
         afterTrim,
         latest,
+        mapFrame,
+        imageReading,
+        imageLoaded,
+        imageFollowing,
+        latestImageLoaded,
       },
       null,
       2,

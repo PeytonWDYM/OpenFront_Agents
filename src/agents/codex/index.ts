@@ -1,11 +1,13 @@
 import { appendFile, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
+import type { AgentReasoningEffort } from "../types";
 import {
   AUTO_COMPACT_TOKEN_LIMIT,
   CONTEXT_WINDOW,
   EFFORT,
   MODEL,
+  REASONING_EFFORTS,
   runtimeConfiguration,
   VERSION,
 } from "./config";
@@ -34,12 +36,14 @@ export type GameTool = {
 };
 export type PlayerDefinition = {
   id: string;
+  reasoningEffort?: AgentReasoningEffort;
   prompt: string;
   tools: GameTool[];
 };
 export type { GameImage, GameToolResult } from "./toolResult";
 type Player = {
   id: string;
+  reasoningEffort: AgentReasoningEffort;
   tools: Set<string>;
   onTool: (name: string, args: unknown) => Promise<GameToolResult>;
   onEvent: (event: Record<string, unknown>) => void;
@@ -137,11 +141,15 @@ export class CodexRuntime {
       const selected = page.data.find((model) => model.model === MODEL);
       if (
         selected &&
-        !selected.supportedReasoningEfforts.some(
-          (level) => level.reasoningEffort === EFFORT,
+        !REASONING_EFFORTS.every((effort) =>
+          selected.supportedReasoningEfforts.some(
+            (level) => level.reasoningEffort === effort,
+          ),
         )
       ) {
-        throw new Error("gpt-6-luna does not support low reasoning.");
+        throw new Error(
+          "gpt-6-luna does not support low and medium reasoning.",
+        );
       }
       cursor = page.nextCursor;
     } while (cursor);
@@ -230,6 +238,7 @@ export class CodexRuntime {
           ),
           model: MODEL,
           effort: EFFORT,
+          supportedReasoningEfforts: REASONING_EFFORTS,
           contextWindow: context.model_context_window,
           autoCompactTokenLimit: context.model_auto_compact_token_limit,
           autoCompactTokenLimitScope:
@@ -252,6 +261,7 @@ export class CodexRuntime {
     onEvent: Player["onEvent"],
   ): Promise<string> {
     validateToolSchemas(definition.tools);
+    const reasoningEffort = definition.reasoningEffort ?? EFFORT;
     if (!this.authenticated)
       throw new Error(
         "Log into Codex with ChatGPT before starting game players.",
@@ -272,7 +282,7 @@ export class CodexRuntime {
         approvalPolicy: "never",
         sandbox: "read-only",
         config: {
-          model_reasoning_effort: EFFORT,
+          model_reasoning_effort: reasoningEffort,
           model_context_window: CONTEXT_WINDOW,
           model_auto_compact_token_limit: AUTO_COMPACT_TOKEN_LIMIT,
           model_auto_compact_token_limit_scope: "total",
@@ -290,7 +300,7 @@ export class CodexRuntime {
     );
     if (
       result.model !== MODEL ||
-      result.reasoningEffort !== EFFORT ||
+      result.reasoningEffort !== reasoningEffort ||
       result.instructionSources.length ||
       result.sandbox.type !== "readOnly" ||
       result.approvalPolicy !== "never"
@@ -301,6 +311,7 @@ export class CodexRuntime {
     }
     this.players.set(result.thread.id, {
       id: definition.id,
+      reasoningEffort,
       tools: new Set(definition.tools.map((tool) => tool.name)),
       onTool,
       onEvent,
@@ -316,7 +327,7 @@ export class CodexRuntime {
           playerId: definition.id,
           threadId: result.thread.id,
           model: MODEL,
-          effort: EFFORT,
+          effort: reasoningEffort,
           contextWindow: CONTEXT_WINDOW,
           autoCompactTokenLimit: AUTO_COMPACT_TOKEN_LIMIT,
           autoCompactTokenLimitScope: "total",
@@ -349,7 +360,7 @@ export class CodexRuntime {
     return this.start(threadId, "turn/start", {
       threadId,
       model: MODEL,
-      effort: EFFORT,
+      effort: this.player(threadId).reasoningEffort,
       environments: [],
       input: [
         { type: "text", text, text_elements: [] },
