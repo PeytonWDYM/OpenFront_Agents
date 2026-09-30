@@ -15,6 +15,7 @@ import {
   sendCheckin,
 } from "./ClusterCheckin";
 import { getDescriptor } from "./DesktopRelease";
+import { forkWorker } from "./ForkWorker";
 import {
   coordinatorUrl,
   LobbyCoordinatorClient,
@@ -204,42 +205,8 @@ export async function startMaster() {
 
   // Fork workers
   for (let i = 0; i < ServerEnv.numWorkers(); i++) {
-    const worker = cluster.fork({
-      WORKER_ID: i,
-      INSTANCE_ID,
-    });
-
-    lobbyService.registerWorker(i, worker);
-    log.info(`Started worker ${i} (PID: ${worker.process.pid})`);
+    forkWorker(i, INSTANCE_ID, lobbyService, log);
   }
-
-  // Handle worker crashes
-  cluster.on("exit", (worker, code, signal) => {
-    const workerId = (worker as any).process?.env?.WORKER_ID;
-    if (workerId === undefined) {
-      log.error(`worker crashed could not find id`);
-      return;
-    }
-
-    const workerIdNum = parseInt(workerId);
-    lobbyService.removeWorker(workerIdNum);
-
-    log.warn(
-      `Worker ${workerId} (PID: ${worker.process.pid}) died with code: ${code} and signal: ${signal}`,
-    );
-    log.info(`Restarting worker ${workerId}...`);
-
-    // Restart the worker with the same ID
-    const newWorker = cluster.fork({
-      WORKER_ID: workerId,
-      INSTANCE_ID,
-    });
-
-    lobbyService.registerWorker(workerIdNum, newWorker);
-    log.info(
-      `Restarted worker ${workerId} (New PID: ${newWorker.process.pid})`,
-    );
-  });
 
   const PORT = 3000;
   server.listen(PORT, () => {
