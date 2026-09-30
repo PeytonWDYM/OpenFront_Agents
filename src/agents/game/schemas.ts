@@ -187,6 +187,7 @@ export interface AgentEvent {
     | "alliance_expired"
     | "alliance_extended"
     | "alliance_extension_request"
+    | "alliance_renewal_available"
     | "unit_incoming"
     | "trade_ship_captured"
     | "nuke_incoming"
@@ -237,6 +238,7 @@ export interface AgentObservation extends AgentMatchStats {
     troops: number;
     attackRatio: number;
     gold: number;
+    traitorRemainingTicks: number;
     maxTroops: number;
     tiles: number;
     canSendEmojiAllPlayers: boolean;
@@ -339,6 +341,12 @@ export interface AgentObservation extends AgentMatchStats {
       upgradeId: number | false;
     }[];
     buildSitesTruncated?: boolean;
+    portPlacement?: {
+      terrain: "owned coastal land";
+      requiresAdjacentWater: true;
+      minStructureDistance: number;
+      constructionTicks: number;
+    };
     buildCosts: { type: string; cost: number }[];
     publicStructures?: {
       id: number;

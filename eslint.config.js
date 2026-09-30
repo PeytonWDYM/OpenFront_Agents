@@ -108,4 +108,9 @@ export default [
       ],
     },
   },
+  {
+    // This browser harness uses JavaScript and does not need a TypeScript project.
+    ...tseslint.configs.disableTypeChecked,
+    files: ["tests/agents/lobby-options-ui-e2e.mjs"],
+  },
 ];

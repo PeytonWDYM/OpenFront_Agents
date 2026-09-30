@@ -34,6 +34,17 @@ export const agentPanelStyles = css`
     border-bottom: 1px solid #ffffff24;
     background: #1b2834;
   }
+  .panel.setup {
+    width: 900px;
+  }
+  .panel.setup .body {
+    padding: 20px;
+  }
+  @media (max-width: 520px) {
+    .panel.setup .body {
+      padding: 12px;
+    }
+  }
   .panel.inspecting {
     height: calc(100dvh - 24px);
   }

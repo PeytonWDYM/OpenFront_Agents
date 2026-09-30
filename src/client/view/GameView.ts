@@ -16,6 +16,7 @@ import { GameMap, TileRef } from "../../core/game/GameMap";
 import {
   GameUpdateType,
   GameUpdateViewData,
+  SpawnCountdownUpdate,
   SpawnPhaseEndUpdate,
 } from "../../core/game/GameUpdates";
 import { ATTACK_DELTA_OUTGOING } from "../../core/game/GameUpdateUtils";
@@ -75,6 +76,7 @@ type TrainPlanState = {
 export class GameView implements GameMap {
   private lastUpdate: GameUpdateViewData | null;
   private startTick: Tick | null = null;
+  private spawnCountdownTicks: Tick = 0;
   private smallIDToID = new Map<number, PlayerID>();
   private _players = new Map<PlayerID, PlayerView>();
   private _units = new Map<number, UnitView>();
@@ -321,6 +323,10 @@ export class GameView implements GameMap {
     if (spawnPhaseEndUpdate) {
       this.startTick = spawnPhaseEndUpdate.startTick;
     }
+    const spawnCountdown = gu.updates[GameUpdateType.SpawnCountdown][0] as
+      | SpawnCountdownUpdate
+      | undefined;
+    if (spawnCountdown) this.spawnCountdownTicks = spawnCountdown.elapsedTicks;
     if (gu.updates[GameUpdateType.Win].length > 0) {
       this._gameOver = true;
     }
@@ -1149,6 +1155,12 @@ export class GameView implements GameMap {
 
   inSpawnPhase(): boolean {
     return this.startTick === null;
+  }
+
+  spawnPhaseElapsedTicks(): Tick {
+    return this._config.gameConfig().spawnReadyClientIDs === undefined
+      ? this.ticks()
+      : this.spawnCountdownTicks;
   }
 
   isSpawnImmunityActive(): boolean {

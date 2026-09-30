@@ -62,7 +62,8 @@ export class SpawnTimer extends LitElement implements Controller {
     if (this.game.inSpawnPhase()) {
       // During spawn phase, only one segment filling full width
       this.ratios = [
-        this.game.ticks() / this.game.config().numSpawnPhaseTurns(),
+        this.game.spawnPhaseElapsedTicks() /
+          this.game.config().numSpawnPhaseTurns(),
       ];
       this.teams = [];
       this.colors = ["rgb(from var(--color-bright-blue) r g b / 0.85)"];

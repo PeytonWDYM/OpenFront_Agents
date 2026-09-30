@@ -1,8 +1,10 @@
 import { z } from "zod";
+import { UnitType } from "../core/game/Game";
 import { CodexRuntime, type GameToolResult } from "./codex/index";
 import { tokenUsage } from "./codex/protocol";
 import { EventLog } from "./EventLog";
 import { submitActions } from "./game/actionBatch";
+import { matchSettingsPrompt } from "./game/config";
 import {
   AgentGame,
   isUrgentAgentEvent,
@@ -21,7 +23,8 @@ import { scriptedAction } from "./ScriptedPlayer";
 import { ArenaSettingsSchema, defaultSettings } from "./Settings";
 import { TurnQueue } from "./TurnQueue";
 import type { AgentPlayer, ArenaJoin, ArenaSnapshot } from "./types";
-import type { MapImage } from "./vision";
+import type { MapImage, Region } from "./vision";
+import { portBuildSiteRegion } from "./vision/buildSites";
 import { VisionOverlaySchema } from "./vision/options";
 
 function imageMetadata(frame: MapImage, tick: number) {
@@ -35,6 +38,7 @@ function imageMetadata(frame: MapImage, tick: number) {
     players: frame.players,
     units: frame.units,
     unitCount: frame.unitCount,
+    ...(frame.buildSites ? { buildSites: frame.buildSites } : {}),
   };
 }
 
@@ -150,13 +154,11 @@ export class Arena {
           );
       }
       this.game = new AgentGame({
-        agentCount: settings.agentCount,
-        mediumAgentCount: settings.mediumAgentCount,
-        tribeCount: settings.tribeCount,
-        nationCount: settings.nationCount,
+        ...settings,
         onEvent: (event) => this.gameEvent(event),
       });
       const lobby = await this.game.create();
+      this.state.settings = { ...settings, gameMap: this.game.config.gameMap };
       this.state.gameId = lobby.gameId;
       this.state.players = this.game.players().map((player, index) => ({
         id: player.id,
@@ -181,7 +183,8 @@ export class Arena {
       }
       if (this.runtime) {
         for (const player of this.state.players) {
-          const prompt = playerPrompt(player.name);
+          const prompt =
+            matchSettingsPrompt(this.game.config) + playerPrompt(player.name);
           this.logs.add(player.id, "instructions", prompt);
           player.threadId = await this.runtime.createPlayer(
             {
@@ -432,13 +435,31 @@ export class Arena {
           }
         : { ...projected, ...(focus ? { target: focus.target } : {}) };
       if (!image && !nukePreview && !focus) return { data };
-      const { x, y, width, height } = observation.map.region;
+      const portSites =
+        region.buildType === UnitType.Port
+          ? observation.map.buildSites
+          : undefined;
+      let imageRegion: Region = observation.map.region;
+      if (
+        portSites?.length &&
+        !focus &&
+        region.x === undefined &&
+        region.y === undefined &&
+        region.width === undefined &&
+        region.height === undefined
+      ) {
+        imageRegion = portBuildSiteRegion(
+          portSites,
+          observation.map.width,
+          observation.map.height,
+        );
+      }
       const preview = nukePreview
         ? await this.game!.visionNukePreview(id, nukePreview)
         : undefined;
       const frame = preview
         ? preview.frame
-        : await this.game!.visionRegion(id, { x, y, width, height }, overlays);
+        : await this.game!.visionRegion(id, imageRegion, overlays, portSites);
       this.logs.add(
         id,
         "vision",
@@ -514,7 +535,10 @@ export class Arena {
     let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
       const observation = this.game!.observe(id);
-      if (observation.spawnPhase) {
+      if (
+        observation.spawnPhase &&
+        (this.game!.config.randomSpawn || observation.self.spawned)
+      ) {
         player.status = "waiting";
         return 500;
       }
@@ -572,7 +596,9 @@ export class Arena {
         }, 90_000);
         await this.runtime!.turn(
           player.threadId!,
-          `Current game state and your previous decision summary follow. Choose your next actions: ${text}`,
+          observation.spawnPhase
+            ? `Choose a legal spawnCandidates tile and submit a spawn intent now. The countdown waits for every agent to place a spawn. Current game state: ${text}`
+            : `Current game state and your previous decision summary follow. Choose your next actions: ${text}`,
           frames,
         );
       }

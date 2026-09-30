@@ -100,8 +100,7 @@ export class HeadsUpMessage extends LitElement implements Controller {
     }
 
     const showImmunityHudDuration = 10 * 10;
-    const spawnEnd = this.game.config().numSpawnPhaseTurns();
-    const ticksSinceSpawnEnd = this.game.ticks() - spawnEnd;
+    const ticksSinceSpawnEnd = this.game.ticksSinceStart();
 
     this.isImmunityActive =
       this.game.config().hasExtendedSpawnImmunity() &&

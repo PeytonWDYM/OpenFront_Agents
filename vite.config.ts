@@ -7,6 +7,7 @@ import { fileURLToPath } from "url";
 import { defineConfig, loadEnv, type Plugin } from "vite";
 import { createHtmlPlugin } from "vite-plugin-html";
 import { configDefaults } from "vitest/config";
+import { z } from "zod";
 import {
   type AssetManifest,
   buildAssetUrl,
@@ -180,6 +181,12 @@ function randomWorkerCreateProxy(numWorkers: number): Plugin {
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
+  const agentPort = z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(65535)
+    .parse(env.OPENFRONT_AGENT_PORT ?? 9010);
   const isProduction = mode === "production";
   // Dev identity: the same INSTANCE_LETTER / NUM_WORKERS defaults the dev
   // server boots with (ServerEnv), so the dev-served index.html carries the
@@ -454,7 +461,7 @@ export default defineConfig(({ mode }) => {
         },
         // API proxies
         "/api/agents": {
-          target: "http://127.0.0.1:9010",
+          target: `http://127.0.0.1:${agentPort}`,
           changeOrigin: true,
           bypass(req, res) {
             const peer = req.socket.remoteAddress;

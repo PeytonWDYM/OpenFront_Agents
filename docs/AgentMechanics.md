@@ -155,7 +155,10 @@ Upgrades count toward construction pricing. Current costs and useful coverage de
 Send `allianceRequest` to request an alliance. Send the same action back to accept an incoming request.
 `allianceReject` names the requestor. `allianceExtension` asks to extend an alliance. `breakAlliance` ends one.
 Alliance requests last 20 seconds. A normal alliance lasts five minutes, unless game settings change it.
-Betrayal normally halves defense and reduces attack speed to 80 percent for 30 seconds.
+Letting an alliance expire or ignoring a renewal request causes no betrayal penalty.
+Breaking an active alliance normally marks the breaker as a traitor for 30 seconds.
+During that period, enemies lose half as many troops and pay 80 percent of the normal tile-conquest time cost against the traitor.
+The penalty does not reduce the traitor's own attack speed. Native exceptions apply when the other player is already a traitor or disconnected.
 Gold and troop donations use `donate_gold` and `donate_troops`. The normal donation cooldown is ten seconds.
 `embargo`, `embargo_all`, and `targetPlayer` use the native trade and alliance rules.
 

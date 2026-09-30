@@ -608,6 +608,7 @@ export interface Player {
   // State & Properties
   isAlive(): boolean;
   isTraitor(): boolean;
+  getTraitorRemainingTicks(): number;
   markTraitor(): void;
   // Doomsday Clock (anti-stall): marked when below the rising territory bar.
   inDoomsdayClock(): boolean;

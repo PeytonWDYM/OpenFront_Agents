@@ -23,6 +23,7 @@ import {
   EMOJI_DONATION_TOO_SMALL,
   EMOJI_LOVE,
 } from "./nation/NationEmojiBehavior";
+import { ticksWithoutSpawnWait } from "./Util";
 
 export class DonateGoldExecution implements Execution {
   private recipient: Player;
@@ -64,7 +65,7 @@ export class DonateGoldExecution implements Execution {
       this.sender.donateGold(this.recipient, this.gold)
     ) {
       // Give relation points based on how much gold was donated
-      const relationUpdate = this.calculateRelationUpdate(this.gold, ticks);
+      const relationUpdate = this.calculateRelationUpdate(this.gold);
       if (relationUpdate > 0) {
         this.recipient.updateRelation(this.sender, relationUpdate);
       }
@@ -114,11 +115,12 @@ export class DonateGoldExecution implements Execution {
     }
   }
 
-  private calculateRelationUpdate(goldSent: Gold, ticks: number): number {
+  private calculateRelationUpdate(goldSent: Gold): number {
     const chunkSize = this.getGoldChunkSize();
     // For every 5 minutes that pass, multiply the chunk size to scale with game progression
     const chunkSizeMultiplier =
-      ticks / (3000 + this.mg.config().numSpawnPhaseTurns());
+      ticksWithoutSpawnWait(this.mg) /
+      (3000 + this.mg.config().numSpawnPhaseTurns());
     const adjustedChunkSize = BigInt(
       Math.round(chunkSize + chunkSize * chunkSizeMultiplier),
     );

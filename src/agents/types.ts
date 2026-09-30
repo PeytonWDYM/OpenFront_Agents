@@ -6,13 +6,9 @@ export type ArenaPhase =
   | "stopped"
   | "error";
 
-export interface ArenaSettings {
-  agentCount: number;
-  mediumAgentCount: number;
-  tribeCount: number;
-  nationCount: number;
-  mode: "codex" | "scripted";
-}
+export type ArenaSettings = import("zod").output<
+  typeof import("./Settings").ArenaSettingsSchema
+>;
 
 export interface ArenaJoin {
   clientId: string;

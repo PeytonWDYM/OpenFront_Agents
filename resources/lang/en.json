@@ -2393,6 +2393,10 @@
     "verified_use_hint": "Play under your verified account name"
   },
   "agents": {
+    "setup_description": "Choose a map and game rules. Each agent uses its own Codex thread. Play alongside them or spectate.",
+    "spawn_setup_help": "Agents choose their spawn tiles. The countdown starts after every agent has spawned.",
+    "roster": "Agent roster",
+    "invalid_settings": "Check the agent counts and game settings before creating the lobby.",
     "alive": "Alive",
     "all_agents": "All agents",
     "auth_required": "Codex uses your local sign-in. Sign in to Codex before creating an agent lobby.",

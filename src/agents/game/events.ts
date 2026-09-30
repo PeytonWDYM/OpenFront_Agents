@@ -14,6 +14,7 @@ export function playerEvents(
   player: Player,
   updates: GameUpdates,
   previousIncoming?: Set<string>,
+  previousAllianceReminders?: Map<number, number>,
 ): AgentEvent[] {
   const events: AgentEvent[] = [];
   const self = player.smallID();
@@ -39,6 +40,32 @@ export function playerEvents(
     }
     previousIncoming.clear();
     for (const attack of incoming) previousIncoming.add(attack.id());
+  }
+  if (previousAllianceReminders) {
+    const alliances = player.alliances();
+    const activeIds = new Set(alliances.map((alliance) => alliance.id()));
+    for (const id of previousAllianceReminders.keys())
+      if (!activeIds.has(id)) previousAllianceReminders.delete(id);
+    if (!game.config().disableAlliances()) {
+      for (const alliance of alliances) {
+        const other = alliance.other(player);
+        const info = player.allianceInfo(other)!;
+        if (
+          !info.canExtend ||
+          info.expiresAt <= game.ticks() ||
+          previousAllianceReminders.get(alliance.id()) === info.expiresAt
+        )
+          continue;
+        previousAllianceReminders.set(alliance.id(), info.expiresAt);
+        add("alliance_renewal_available", {
+          allianceId: alliance.id(),
+          other: other.id(),
+          expiresAt: info.expiresAt,
+          ticksRemaining: info.expiresAt - game.ticks(),
+          otherAgreedToExtend: info.otherAgreedToExtend,
+        });
+      }
+    }
   }
   for (const event of updates[U.DisplayChatEvent]) {
     if (event.playerID === self)
@@ -94,6 +121,18 @@ export function playerEvents(
               ? undefined
               : playerId(event.focusPlayerID),
         });
+      if (
+        event.playerID === self &&
+        event.message === "events_display.alliance_renewed"
+      ) {
+        const other = game.playerBySmallID(event.focusPlayerID!) as Player;
+        const alliance = player.allianceWith(other)!;
+        add("alliance_extended", {
+          allianceId: alliance.id(),
+          other: other.id(),
+          expiresAt: alliance.expiresAt(),
+        });
+      }
     }
   }
   for (const event of updates[U.AllianceRequest]) {
@@ -112,6 +151,9 @@ export function playerEvents(
       add("alliance_broken", {
         traitor: playerId(event.traitorID),
         betrayed: playerId(event.betrayedID),
+        traitorRemainingTicks: (
+          game.playerBySmallID(event.traitorID) as Player
+        ).getTraitorRemainingTicks(),
       });
   }
   for (const event of updates[U.AllianceExpired]) {
@@ -121,10 +163,6 @@ export function playerEvents(
           event.player1ID === self ? event.player2ID : event.player1ID,
         ),
       });
-  }
-  for (const event of updates[U.AllianceExtension]) {
-    if (event.playerID === self)
-      add("alliance_extended", { allianceId: event.allianceID });
   }
   for (const event of updates[U.UnitIncoming]) {
     if (event.playerID === self) {
@@ -207,6 +245,7 @@ export function isUrgentAgentEvent(
     case "alliance_reply":
     case "alliance_expired":
     case "alliance_extension_request":
+    case "alliance_renewal_available":
       return true;
     case "chat":
       return event.data.direction === "incoming";

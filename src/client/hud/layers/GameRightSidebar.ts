@@ -157,7 +157,7 @@ export class GameRightSidebar extends LitElement implements Controller {
         return;
       }
       const spawnPhaseDurationTicks = this.game.config().numSpawnPhaseTurns();
-      const currentTicks = this.game.ticks();
+      const currentTicks = this.game.spawnPhaseElapsedTicks();
       const remainingTicks = spawnPhaseDurationTicks - currentTicks;
       const remainingSeconds = Math.ceil(remainingTicks / 10);
       this.timer = Math.max(0, remainingSeconds);

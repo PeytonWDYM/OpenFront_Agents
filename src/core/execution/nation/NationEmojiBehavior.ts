@@ -23,6 +23,7 @@ import {
 } from "../../snapshot/SnapshotType";
 import { flattenedEmojiTable } from "../../Util";
 import { EmojiExecution } from "../EmojiExecution";
+import { ticksWithoutSpawnWait } from "../Util";
 
 const emojiId = (e: (typeof flattenedEmojiTable)[number]) =>
   flattenedEmojiTable.indexOf(e);
@@ -222,7 +223,7 @@ export class NationEmojiBehavior {
   }
 
   private findRat(): void {
-    if (this.game.ticks() < 6000) return; // Ignore first 10 minutes (everybody is small in the early game)
+    if (ticksWithoutSpawnWait(this.game) < 6000) return; // Ignore first 10 minutes (everybody is small in the early game)
     if (!this.random.chance(10000)) return;
 
     const totalLand = this.game.numLandTiles();
@@ -244,7 +245,7 @@ export class NationEmojiBehavior {
   }
 
   private greetNearbyPlayers(): void {
-    if (this.game.ticks() > 600) return; // Only in the first minute
+    if (ticksWithoutSpawnWait(this.game) > 600) return; // Only in the first minute
     if (!this.random.chance(250)) return;
 
     const nearbyHumans = this.player
