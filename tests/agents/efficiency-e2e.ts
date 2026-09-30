@@ -6,8 +6,10 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { Arena } from "../../src/agents/Arena";
 import type { GameImage, GameToolResult } from "../../src/agents/codex";
 import { AgentGame } from "../../src/agents/game/AgentGame";
+import { DecisionFeedback } from "../../src/agents/game/feedback";
 import { LocalMapLoader } from "../../src/agents/game/LocalMapLoader";
 import { ObservationBuilder } from "../../src/agents/game/observation";
+import type { AgentPlayer } from "../../src/agents/types";
 import { MapImages } from "../../src/agents/vision";
 import {
   Difficulty,
@@ -56,6 +58,7 @@ Reflect.set(game, "seats", [
   { id: "agent001", clientId: "effic001", name: "Efficiency One" },
 ]);
 Reflect.set(game, "runner", runner);
+Reflect.set(game, "feedback", new DecisionFeedback(runner.game));
 Reflect.set(game, "observations", new ObservationBuilder(runner.game));
 Reflect.set(game, "gameId_", "agentEfficiencyE2E");
 Reflect.set(game, "mapImages", new MapImages("agentEfficiencyE2E"));
@@ -100,17 +103,36 @@ const tool: (
   args: unknown,
 ) => Promise<GameToolResult> = Reflect.get(arena, "tool").bind(arena);
 const originalNow = Date.now;
+const runtimeEvent: (
+  player: AgentPlayer,
+  event: Record<string, unknown>,
+) => void = Reflect.get(arena, "runtimeEvent").bind(arena);
+const player = Reflect.get(arena, "state").players[0] as AgentPlayer;
 let now = originalNow();
 Date.now = () => now;
 try {
-  await tool("agent001", "think", {
-    note: "Keep the eastern harbor as my next target.",
-  });
   await decide("agent001");
+  // A final decision summary survives even when the player never calls think.
+  runtimeEvent(player, {
+    method: "item/completed",
+    params: {
+      item: {
+        type: "agentMessage",
+        phase: "final_answer",
+        text: "Save for a Port to fund the eastern front.",
+      },
+    },
+  });
   now += 10_000;
   runner.addTurn({ turnNumber: runner.game.ticks(), intents: [] });
   assert.ok(runner.executeNextTick());
   await decide("agent001");
+  assert.ok(
+    requests[1].text.includes("Save for a Port to fund the eastern front."),
+  );
+  await tool("agent001", "think", {
+    note: "Keep the eastern harbor as my next target.",
+  });
   now += 60_000;
   await decide("agent001");
   assert.deepEqual(
@@ -119,9 +141,11 @@ try {
   );
   assert.notEqual(requests[0].images[1].path, requests[1].images[0].path);
   assert.ok(
-    requests.every((request) =>
-      request.text.includes("Keep the eastern harbor as my next target."),
-    ),
+    requests
+      .slice(2)
+      .every((request) =>
+        request.text.includes("Keep the eastern harbor as my next target."),
+      ),
   );
   const raw = game.observe("agent001");
   const allRivals = await tool("agent001", "observe_world", {

@@ -34,8 +34,10 @@ It does not change the daily Codex configuration. Each player gets a separate pe
 Run `npm run dev:agents` to start the local game and arena. Run `npm run agents` when the game already runs.
 Open `http://localhost:9000` and select **Agent lobby**.
 Choose the agent, tribe, and nation counts, then select **Play** or **Spectate**.
+Choose how many agents use medium reasoning. The remaining agents use low reasoning. Native player names include their reasoning level.
 The arena creates the lobby, joins the native page, and starts after the server confirms your selected role.
 Select a player to read its decisions, actions, and token usage. Enable **Show diagnostics** to inspect raw runtime events and observations.
+Map images appear in the normal transcript. Reserved image frames prevent late image loads from moving the text.
 The transcript follows new entries while you read the bottom. Scrolling up preserves your place. Select **Latest** to resume following.
 The agent list shows combined token usage. Each thread view shows only that player's token usage.
 Usage updates when Codex reports it. Scripted tests do not use model tokens.
@@ -60,8 +62,10 @@ Agents choose their own tactics. The prompt explains mechanics and encourages ac
 Agents can batch several builds or upgrades in one call. Native resources, placement rules, and cooldowns determine what executes.
 The bridge reads the latest native tick when a decision starts. Tick updates alone do not request model inference.
 It supplies only events newer than that agent's previous observation. Inspector logs stay local and are not appended to each prompt.
-Earlier decisions remain in the persistent Codex thread. Native compaction starts at a configured 24,000-token threshold.
-The latest explicit strategy note accompanies each decision, so an agent can retain its goal after compaction.
+Earlier decisions remain in the persistent Codex thread. Native compaction starts at a configured 60,000-token threshold.
+The latest final decision summary and explicit strategy note accompany each decision. These record intentions, not proof of execution.
+Decision feedback reports native resource changes, income, construction, troop commitments, and captured trade ships since the previous decision.
+Inspector reads and tool observations do not consume this feedback. Net troop changes are not combat losses.
 Agents can request focused data when they need exact tiles, costs, or communication choices.
 Each decision includes current build prices, including units the agent cannot yet afford.
 The action bridge checks native build legality before submission. Invalid builds report the required gold and current balance.
@@ -72,7 +76,7 @@ Public trade observations and map cues identify ship owners, destination Ports, 
 Warship hints use legal water patrol targets. Agents can submit multiple native actions in a single `act` call.
 Batch actions return individual submission results. A successful submission does not guarantee execution against a changing game state.
 The `think` tool records a short strategy note and can inspect a focused region in the same call.
-It keeps low reasoning. Routine decisions can act directly.
+It keeps the player's configured reasoning level. Routine decisions can act directly.
 They can request a regional image or inspect owned units and public enemy structures within that region.
 They can also focus an image on any human, nation, or tribe by its native player ID.
 Focused views show current public territory and keep the requesting agent's private information separate.

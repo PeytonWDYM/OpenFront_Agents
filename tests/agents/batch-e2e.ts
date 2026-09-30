@@ -7,6 +7,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { validateToolSchemas } from "../../src/agents/codex/toolSchema";
 import { submitActions } from "../../src/agents/game/actionBatch";
 import { AgentGame } from "../../src/agents/game/AgentGame";
+import { DecisionFeedback } from "../../src/agents/game/feedback";
 import { LocalMapLoader } from "../../src/agents/game/LocalMapLoader";
 import {
   type AgentAction,
@@ -63,6 +64,7 @@ const self = runner.game.playerByClientID("batch001")!;
 const recipient = runner.game.playerByClientID("batch002")!;
 const bridge = new AgentGame({ agentCount: 1, tribeCount: 0, nationCount: 0 });
 Reflect.set(bridge, "runner", runner);
+Reflect.set(bridge, "feedback", new DecisionFeedback(runner.game));
 Reflect.set(bridge, "attackRatios", new Map([["agent001", 0.2]]));
 Reflect.set(bridge, "buildStreaks", new Map([["agent001", 0]]));
 const pending: Turn["intents"] = [];

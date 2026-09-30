@@ -1,9 +1,9 @@
 # Agent efficiency and spectator review
 
 The agent harness keeps game strategy with each player. It uses native actions, costs, placement checks, and cooldowns.
-Luna remains on low reasoning.
+The first pass used Luna on low reasoning. The follow-up supports a low/medium comparison.
 
-## Findings and changes
+## First-pass findings and changes
 
 | Finding                                                                               | Change                                                                                                                               | Verification                                                                            |
 | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------- |
@@ -14,6 +14,24 @@ Luna remains on low reasoning.
 | A normal observation supplied only one fresh site per building type.                  | Add an optional building-type query for multiple spaced native sites, with a truncation flag.                                        | Native construction test checks sites, spacing, and region filters.                     |
 | Crowded maps and low-detail inputs made labels hard to read.                          | Use high-detail decision images, shorter labels, selectable overlays, and exact public marker data.                                  | Saved PNGs and native vision tests.                                                     |
 | Raw runtime notifications overwhelmed the transcript and moved the reader's position. | Default to decisions, actions, and errors. Preserve row identity and scroll position. Follow new entries only at the bottom.         | Browser assertions and a screenshot.                                                    |
+
+## Economic feedback follow-up
+
+The follow-up raises the compaction threshold to 60,000 tokens and retains the 150,000-token context window.
+Each agent can use low or medium reasoning. Native player names and inspector headers show the assigned level.
+
+Each decision receives the previous final summary and native outcome changes. The summary preserves intent without another model call.
+Feedback separates net resources from gross income, troop commitments, observed construction, and lost trade ships.
+It does not infer combat losses from net troop changes. Inspector reads do not consume decision feedback.
+
+The prompt explains automatic factory links and higher payments at allied train stops.
+Agents choose alliances, investments, actions, and decision delays. The repeated aggression instruction has been removed.
+
+Self-owned nuclear destinations are rejected. Blast previews list own and friendly structures at risk using the native destruction radius.
+Map images appear in the default transcript. Reserved frames prevent image loading from changing scroll position.
+
+Focused native checks cover reasoning configuration, economic outcomes, trade captures, and nuclear targeting.
+The browser check covers visible images, delayed loads, and scroll behavior. These checks do not establish full-game strategy quality or token savings.
 
 ## Evidence
 

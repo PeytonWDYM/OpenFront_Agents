@@ -6,6 +6,7 @@ export type AgentRole = "play" | "spectate";
 
 export const defaultAgentSettings: AgentSettings = {
   agentCount: 4,
+  mediumAgentCount: 0,
   tribeCount: 100,
   nationCount: 52,
   mode: "codex",
@@ -26,6 +27,7 @@ export function agentLobbyForm(
     create(
       {
         agentCount: Number(values.get("agentCount")),
+        mediumAgentCount: Number(values.get("mediumAgentCount")),
         tribeCount: Number(values.get("tribeCount")),
         nationCount: Number(values.get("nationCount")),
         mode: "codex",
@@ -55,8 +57,27 @@ export function agentLobbyForm(
             step="1"
             required
             .value=${String(settings.agentCount)}
+            @input=${(event: Event) => {
+              const input = event.currentTarget as HTMLInputElement;
+              input.form!.querySelector<HTMLInputElement>(
+                'input[name="mediumAgentCount"]',
+              )!.max = input.value;
+            }}
           />
         </label>
+        <label>
+          ${translateText("agents.medium_count")}
+          <input
+            name="mediumAgentCount"
+            type="number"
+            min="0"
+            max=${settings.agentCount}
+            step="1"
+            required
+            .value=${String(settings.mediumAgentCount)}
+          />
+        </label>
+        <p class="muted">${translateText("agents.medium_count_help")}</p>
         <label for="agent-tribes">
           ${translateText("agents.tribes")}
           <output
@@ -92,7 +113,7 @@ export function agentLobbyForm(
           .value=${String(settings.nationCount)}
           @input=${updateCount}
         />
-        <p class="muted">${translateText("agents.model")}</p>
+        <p class="muted">${translateText("agents.model_choice")}</p>
         <div class="role-buttons">
           <button class="primary" type="submit" value="play">
             ${translateText("agents.play")}

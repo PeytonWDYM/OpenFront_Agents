@@ -12,10 +12,11 @@ import { z } from "zod";
 
 export const MODEL = "gpt-6-luna";
 export const EFFORT = "low";
+export const REASONING_EFFORTS = ["low", "medium"] as const;
 export const VERSION = "0.158.0";
 export const CONTEXT_WINDOW = 150_000;
-// Compact replayed history early while keeping the native model window and thread.
-export const AUTO_COMPACT_TOKEN_LIMIT = 24_000;
+// Retain recent decisions until the native history reaches 60,000 tokens.
+export const AUTO_COMPACT_TOKEN_LIMIT = 60_000;
 
 const cachedModel = z
   .object({
@@ -67,10 +68,13 @@ export async function runtimeConfiguration() {
     );
   const model = catalog.models.find((entry) => entry.slug === MODEL);
   if (
-    !model?.supported_reasoning_levels.some((level) => level.effort === EFFORT)
+    !model ||
+    !REASONING_EFFORTS.every((effort) =>
+      model.supported_reasoning_levels.some((level) => level.effort === effort),
+    )
   ) {
     throw new Error(
-      "The Codex model catalog must contain gpt-6-luna with low reasoning. Open Codex to refresh it.",
+      "The Codex model catalog must contain gpt-6-luna with low and medium reasoning. Open Codex to refresh it.",
     );
   }
   if (!model.input_modalities.includes("image")) {

@@ -21,12 +21,15 @@ import {
   GameUpdateType,
   GameUpdateViewData,
 } from "../../core/game/GameUpdates";
+import { getAgentReasoningEffort } from "../Reasoning";
 import { MapImages, playerTerritoryRegion } from "../vision";
 import { VisionOverlays } from "../vision/options";
 import { LocalMapLoader } from "./LocalMapLoader";
 import { PlayerSocket } from "./PlayerSocket";
 import { projectDecisionObservation } from "./decision";
 import { playerEvents } from "./events";
+import { DecisionFeedback } from "./feedback";
+import { assertAgentNuclearTarget } from "./nuclearTargeting";
 import { buildNukePreview, NukePreviewRequest } from "./nukePreview";
 import { ObservationBuilder } from "./observation";
 import {
@@ -102,6 +105,7 @@ const LobbyResponseSchema = z.object({
 
 export interface AgentGameOptions {
   agentCount: number;
+  mediumAgentCount?: number;
   tribeCount?: number;
   nationCount?: number;
   map?: GameMapType;
@@ -114,6 +118,7 @@ export class AgentGame {
   private seats: PlayerSocket[] = [];
   private runner?: GameRunner;
   private observations?: ObservationBuilder;
+  private feedback?: DecisionFeedback;
   private histories = new Map<string, AgentEvent[]>();
   private incomingAttacks = new Map<string, Set<string>>();
   private attackRatios = new Map<string, number>();
@@ -129,6 +134,11 @@ export class AgentGame {
 
   constructor(private options: AgentGameOptions) {
     z.number().int().min(1).max(400).parse(options.agentCount);
+    z.number()
+      .int()
+      .min(0)
+      .max(options.agentCount)
+      .parse(options.mediumAgentCount ?? 0);
     z.number()
       .int()
       .min(0)
@@ -187,7 +197,15 @@ export class AgentGame {
     this.workerId = lobby.workerIndex;
     for (let index = 0; index < this.options.agentCount; index++) {
       const id = `agent${String(index + 1).padStart(3, "0")}`;
-      const seat = new PlayerSocket(id, `Agent ${index + 1}`, this.workerId);
+      const reasoningEffort = getAgentReasoningEffort(
+        index,
+        this.options.mediumAgentCount ?? 0,
+      );
+      const seat = new PlayerSocket(
+        id,
+        `Agent ${index + 1} - ${reasoningEffort}`,
+        this.workerId,
+      );
       this.seats.push(seat);
       this.histories.set(id, []);
       this.incomingAttacks.set(id, new Set());
@@ -269,6 +287,7 @@ export class AgentGame {
         (update) => this.update(update),
       );
       this.observations = new ObservationBuilder(this.runner.game);
+      this.feedback = new DecisionFeedback(this.runner.game);
       for (const turn of message.turns) this.applyTurn(turn);
       this.options.onEvent?.({
         type: "game_started",
@@ -303,6 +322,7 @@ export class AgentGame {
       return;
     }
     const game = this.runner!.game;
+    this.observations!.recordIncome();
     for (const seat of this.seats) {
       const player = game.playerByClientID(seat.clientId);
       if (!player) continue;
@@ -312,6 +332,7 @@ export class AgentGame {
         update.updates,
         this.incomingAttacks.get(seat.id)!,
       );
+      this.feedback!.recordEvents(player, events);
       const history = this.histories.get(seat.id)!;
       history.push(...events);
       this.histories.set(
@@ -386,6 +407,13 @@ export class AgentGame {
     return projectDecisionObservation(this.observe(agentId));
   }
 
+  /** Advance feedback only when the agent starts a decision. */
+  decisionFeedback(agentId: string) {
+    const player = this.player(agentId);
+    this.observations!.recordIncome();
+    return this.feedback!.begin(player);
+  }
+
   async vision(agentId: string, overlays?: VisionOverlays) {
     const player = this.player(agentId);
     return this.mapImages!.render(this.runner!.game, player, overlays);
@@ -428,6 +456,9 @@ export class AgentGame {
         blast: preview.blast,
         betrayedAllyIds: preview.betrayedAllyIds,
         targetingAlly: preview.targetingAlly,
+        targetingSelf: preview.targetingSelf,
+        ownStructuresAtRisk: preview.ownStructuresAtRisk,
+        friendlyStructuresAtRisk: preview.friendlyStructuresAtRisk,
         interception: preview.interception,
       },
     };
@@ -449,6 +480,7 @@ export class AgentGame {
           "This unit spawns through its parent structure. Use the boat intent for troop transports.",
         );
       const game = this.runner!.game;
+      assertAgentNuclearTarget(game, player, intent.unit, intent.tile);
       if (
         !game.isValidRef(intent.tile) ||
         player.canBuild(intent.unit, intent.tile) === false
@@ -464,6 +496,7 @@ export class AgentGame {
     )
       intent = { ...intent, troops: player.troops() * ratio };
     this.seat(agentId).send({ type: "intent", intent });
+    this.feedback!.recordSubmitted(player, intent);
     this.attackRatios.set(agentId, ratio);
     if (isOffenseIntent(intent)) this.buildStreaks.set(agentId, 0);
     else if (isStructureBuild(intent))

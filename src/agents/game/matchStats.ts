@@ -10,12 +10,10 @@ export class MatchStats {
 
   constructor(private readonly game: Game) {}
 
-  observe(player: Player) {
+  /** Record native counters on simulation updates, independent of tool reads. */
+  recordIncome(): void {
     const game = this.game;
     const tick = game.ticks();
-    const landTiles = game.totalLandTiles();
-    const landPercent = (tiles: number) =>
-      landTiles > 0 ? (tiles / landTiles) * 100 : 0;
     if (tick >= this.rateTick + 5) {
       for (const other of game.allPlayers()) {
         this.rates.record(
@@ -31,6 +29,32 @@ export class MatchStats {
       }
       this.rateTick = tick;
     }
+  }
+
+  private incomeRates(player: Player) {
+    return {
+      goldIncomePerMinute: Math.round(
+        this.rates.goldIncomePerMin(player.smallID()),
+      ),
+      shipTradeGoldPerMinute: Math.round(
+        this.rates.shipTradeGoldPerMin(player.smallID()),
+      ),
+      trainTradeGoldPerMinute: Math.round(
+        this.rates.trainTradeGoldPerMin(player.smallID()),
+      ),
+      piracyGoldPerMinute: Math.round(
+        this.rates.piracyGoldPerMin(player.smallID()),
+      ),
+    };
+  }
+
+  observe(player: Player) {
+    const game = this.game;
+    const tick = game.ticks();
+    const landTiles = game.totalLandTiles();
+    const landPercent = (tiles: number) =>
+      landTiles > 0 ? (tiles / landTiles) * 100 : 0;
+    this.recordIncome();
     if (this.leaderboardTick !== tick) {
       this.players = this.playerRows(landPercent);
       this.leaderboardTick = tick;
@@ -48,7 +72,36 @@ export class MatchStats {
     const tilesOwned =
       team === null ? player.numTilesOwned() : game.teamTilesOwned(team);
     const timer = game.config().gameConfig().maxTimerValue;
+    const factories = player
+      .units(UnitType.Factory)
+      .filter((unit) => !unit.isUnderConstruction());
+    const destinations = new Map<number, Player>();
+    let connectedFactories = 0;
+    for (const factory of factories) {
+      const cluster = game
+        .railNetwork()
+        .stationManager()
+        .findStation(factory)
+        ?.getCluster();
+      if (!cluster) continue;
+      const available = cluster.availableForTrade(player);
+      if (available.size) connectedFactories++;
+      for (const station of available)
+        destinations.set(station.unit.id(), station.unit.owner());
+    }
     return {
+      economy: {
+        ...this.incomeRates(player),
+        factories: factories.length,
+        connectedFactories,
+        trainTradeDestinations: destinations.size,
+        alliedTrainTradeDestinations: [...destinations.values()].filter(
+          (owner) => owner !== player && player.isAlliedWith(owner),
+        ).length,
+        structuresUnderConstruction: player
+          .units()
+          .filter((unit) => unit.isUnderConstruction()).length,
+      },
       victory: {
         mode: game.config().gameConfig().gameMode,
         side: team ?? player.id(),
@@ -104,18 +157,7 @@ export class MatchStats {
         gold: Number(player.gold()),
         troops: Math.floor(player.troops()),
         maxTroops: Math.floor(this.game.config().maxTroops(player)),
-        goldIncomePerMinute: Math.round(
-          this.rates.goldIncomePerMin(player.smallID()),
-        ),
-        shipTradeGoldPerMinute: Math.round(
-          this.rates.shipTradeGoldPerMin(player.smallID()),
-        ),
-        trainTradeGoldPerMinute: Math.round(
-          this.rates.trainTradeGoldPerMin(player.smallID()),
-        ),
-        piracyGoldPerMinute: Math.round(
-          this.rates.piracyGoldPerMin(player.smallID()),
-        ),
+        ...this.incomeRates(player),
         allies: player.allies().length,
         betrayals: player.betrayals(),
         unitLevels: Object.fromEntries(

@@ -105,19 +105,21 @@ export function agentTranscript(
                           </time>
                         </div>
                         <p class="event-preview">${preview}</p>
+                        ${event.image
+                          ? html`<div class="vision-preview">
+                              <img
+                                class="vision-image"
+                                src=${event.image}
+                                alt=${translateText("agents.vision_image")}
+                                loading="lazy"
+                              />
+                            </div>`
+                          : nothing}
                         <details class="event-details">
                           <summary>
                             ${translateText("agents.event_details")}
                           </summary>
                           <pre>${event.text}</pre>
-                          ${event.image
-                            ? html`<img
-                                class="vision-image"
-                                src=${event.image}
-                                alt=${translateText("agents.vision_image")}
-                                loading="lazy"
-                              />`
-                            : nothing}
                         </details>
                       </article>
                     `;
