@@ -39,6 +39,9 @@ import { TestConfig } from "../util/TestConfig";
 // Player focus failures: unknown IDs resolve, the crop uses an old spawn,
 // a nation or tribe changes the viewing agent, target resources enter metadata,
 // or competing region/preview selectors silently replace the requested focus.
+// Overlay failures: a clean view keeps annotations, layer switches change the
+// coordinate transform, same-tick images overwrite another configuration, labels
+// cannot resolve to native IDs, or unit metadata exposes private resources.
 const game = await setup("plains", { infiniteGold: true, instantBuild: true }, [
   playerInfo("Vision Agent", PlayerType.Human),
   playerInfo("Nearby Tribe", PlayerType.Bot),
@@ -66,6 +69,54 @@ for (let level = 1; level < 5; level++) stackedSam.increaseLevel();
 const images = new MapImages("vision-region-e2e");
 const region = { x: 25, y: 25, width: 45, height: 45 };
 const frame = await images.renderRegion(game, self, region);
+const cleanFrame = await images.renderRegion(game, self, region, false);
+const unitFrame = await images.renderRegion(game, self, region, {
+  labels: false,
+  grid: false,
+  sam: false,
+});
+const fullFrame = await images.renderRegion(game, self, region, true);
+assert.deepEqual(cleanFrame.region, frame.region);
+assert.deepEqual(cleanFrame.mapPixels, frame.mapPixels);
+assert.notEqual(cleanFrame.path, frame.path);
+assert.notEqual(fullFrame.path, frame.path);
+assert.equal(frame.overlays.sam, false);
+assert.equal(frame.overlays.tradeRoutes, false);
+assert(Object.values(cleanFrame.overlays).every((enabled) => !enabled));
+assert.equal(fullFrame.overlays.sam, true);
+assert.equal(fullFrame.overlays.tradeRoutes, true);
+assert.deepEqual(cleanFrame.players, []);
+assert.deepEqual(cleanFrame.units, []);
+assert.deepEqual(unitFrame.players, []);
+assert.equal(frame.detail, "high");
+assert(frame.players.some((player) => player.playerId === self.id()));
+for (const player of frame.players) {
+  assert.equal(game.player(player.playerId).smallID(), player.smallId);
+  assert.equal(player.color.length, 3);
+  assert.equal(player.tile, game.ref(player.x, player.y));
+}
+const cityMetadata = unitFrame.units.find((unit) => unit.id === city.id())!;
+assert.equal(cityMetadata.level, city.level());
+assert.equal(cityMetadata.ownerId, self.id());
+assert.equal(cityMetadata.tile, game.ref(cityMetadata.x, cityMetadata.y));
+assert(!("gold" in cityMetadata));
+assert(!("troops" in cityMetadata));
+assert(!(await readFile(cleanFrame.path)).equals(await readFile(frame.path)));
+await writeFile(
+  resolve(".agent-arena/vision-overlay-e2e.json"),
+  JSON.stringify(
+    {
+      passed: true,
+      inferenceRequests: 0,
+      frame,
+      cleanFrame,
+      unitFrame,
+      fullFrame,
+    },
+    null,
+    2,
+  ),
+);
 assert.deepEqual(frame.region, region);
 assert(frame.width <= 512 && frame.height <= 512);
 const png = await readFile(frame.path);

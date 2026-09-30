@@ -1,8 +1,8 @@
-import { z, ZodError } from "zod";
+import { z } from "zod";
 import { CodexRuntime, type GameToolResult } from "./codex/index";
 import { tokenUsage } from "./codex/protocol";
 import { EventLog } from "./EventLog";
-import { ActionDecision, ActionLimitError } from "./game/actionBatch";
+import { submitActions } from "./game/actionBatch";
 import {
   AgentGame,
   isUrgentAgentEvent,
@@ -15,12 +15,27 @@ import {
   ObserveQuerySchema,
   quickChatKeys,
 } from "./game/schemas";
-import { OPENCODE_TURN_TIMEOUT_MS, OpenCodeRuntime } from "./opencode/index";
 import { playerPrompt } from "./PlayerPrompt";
 import { scriptedAction } from "./ScriptedPlayer";
 import { ArenaSettingsSchema, defaultSettings } from "./Settings";
 import { TurnQueue } from "./TurnQueue";
 import type { AgentPlayer, ArenaJoin, ArenaSnapshot } from "./types";
+import type { MapImage } from "./vision";
+import { VisionOverlaySchema } from "./vision/options";
+
+function imageMetadata(frame: MapImage, tick: number) {
+  return {
+    tick,
+    width: frame.width,
+    height: frame.height,
+    region: frame.region,
+    mapPixels: frame.mapPixels,
+    overlays: frame.overlays,
+    players: frame.players,
+    units: frame.units,
+    unitCount: frame.unitCount,
+  };
+}
 
 export const ObserveWorldQuerySchema = ObserveQuerySchema.extend({
   quickChatKeys: z.boolean().optional(),
@@ -28,6 +43,7 @@ export const ObserveWorldQuerySchema = ObserveQuerySchema.extend({
     .boolean()
     .optional()
     .describe("Return a map image of the requested region."),
+  overlays: VisionOverlaySchema.optional(),
   nukePreview: NukePreviewRequestSchema.optional().describe(
     "Preview an atom or hydrogen bomb trajectory, blast, and SAM coverage risk. Returns an image.",
   ),
@@ -67,14 +83,6 @@ export const ThinkQuerySchema = z
 const message = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
 
-/** Stall-style OpenCode turn failures skip one decision instead of halting. */
-export function isSkippableTurnError(text: string, mode: string): boolean {
-  return (
-    mode === "opencode" &&
-    /four-minute ceiling|exit null|timed out|interrupt|abort/i.test(text)
-  );
-}
-
 export class Arena {
   private state: ArenaSnapshot = {
     phase: "idle",
@@ -85,14 +93,13 @@ export class Arena {
     totalTokens: 0,
   };
   private game: AgentGame | null = null;
-  private runtime: CodexRuntime | OpenCodeRuntime | null = null;
+  private runtime: CodexRuntime | null = null;
   private queue: TurnQueue | null = null;
   private logs = new EventLog();
   private readonly suppliedTicks = new Map<string, number>();
   private readonly requestedDelays = new Map<string, number>();
-  private readonly calls = new Map<string, number>();
-  private readonly invalidActions = new Map<string, number>();
-  private readonly actions = new Map<string, ActionDecision>();
+  private readonly strategyNotes = new Map<string, string>();
+  private readonly overviewAt = new Map<string, number>();
   private readonly halted = new Set<string>();
 
   snapshot(): ArenaSnapshot {
@@ -118,6 +125,8 @@ export class Arena {
     this.logs = new EventLog();
     this.halted.clear();
     this.suppliedTicks.clear();
+    this.strategyNotes.clear();
+    this.overviewAt.clear();
     this.state = {
       phase: "idle",
       gameId: null,
@@ -135,13 +144,6 @@ export class Arena {
         if (!this.state.runtime.models.includes("gpt-6-luna"))
           throw new Error(
             "The authenticated Codex runtime does not offer gpt-6-luna.",
-          );
-      } else if (settings.mode === "opencode") {
-        this.runtime = new OpenCodeRuntime();
-        this.state.runtime = await this.runtime.initialize();
-        if (!this.state.runtime.authenticated)
-          throw new Error(
-            "OpenCode authentication is required. Run opencode auth login first.",
           );
       }
       this.game = new AgentGame({
@@ -187,13 +189,13 @@ export class Arena {
                 {
                   name: "think",
                   description:
-                    "Record a brief strategy note before costly naval, nuclear, or diplomatic choices. Optionally request a focused observation with the same privacy rules as observe_world. Uses one tool call. Does not submit actions. Act directly for routine decisions to save usage.",
+                    "Save a brief plan for later decisions. Optionally request a focused observation. Does not submit actions. Act directly for routine decisions.",
                   inputSchema: z.toJSONSchema(ThinkQuerySchema),
                 },
                 {
                   name: "act",
                   description:
-                    "Submit one intent or 1..2 intents in order with native IDs. Each intent uses the two-action budget. Set attackRatio or nextDecisionSeconds when needed. Submissions are not atomic and do not guarantee execution.",
+                    "Submit one intent or a batch of intents in order with native IDs. Batch independent legal actions to reduce tool overhead. Set attackRatio or nextDecisionSeconds when needed. Submissions are not atomic and do not guarantee execution.",
                   inputSchema: agentActionToolSchema,
                 },
               ],
@@ -204,9 +206,6 @@ export class Arena {
           this.logs.add(player.id, "thread", player.threadId);
         }
       }
-      // OpenCode matches Codex concurrency; slow free-pool turns set the
-      // pace per agent, and the queue still defaults each agent to a
-      // decision every ten seconds once its turn completes.
       this.queue = new TurnQueue(
         Math.ceil(settings.agentCount / 4),
         (id) =>
@@ -355,18 +354,10 @@ export class Arena {
       !this.player(id).alive
     )
       throw new Error("This player's decisions have stopped.");
-    const calls = (this.calls.get(id) ?? 0) + 1;
-    this.calls.set(id, calls);
-    if (calls > 4) {
-      this.halted.add(id);
-      const player = this.player(id);
-      if (player.threadId)
-        void this.runtime!.interrupt(player.threadId).catch(() => {});
-      throw new Error("The four-tool-call limit ended this decision.");
-    }
     let observationQuery: z.infer<typeof ObserveWorldQuerySchema> | undefined;
     if (name === "think") {
       const { note, observe } = ThinkQuerySchema.parse(args);
+      this.strategyNotes.set(id, note);
       this.logs.add(id, "think", note);
       if (observe === undefined) return { data: { recorded: true } };
       observationQuery = observe;
@@ -377,6 +368,7 @@ export class Arena {
       const {
         quickChatKeys: includeQuickChatKeys,
         image,
+        overlays,
         nukePreview,
         playerId,
         ...region
@@ -397,6 +389,7 @@ export class Arena {
       const sections =
         region.sections ??
         (focus !== undefined ||
+        region.buildType !== undefined ||
         region.x !== undefined ||
         region.y !== undefined ||
         region.width !== undefined ||
@@ -436,7 +429,7 @@ export class Arena {
         : undefined;
       const frame = preview
         ? preview.frame
-        : await this.game!.visionRegion(id, { x, y, width, height });
+        : await this.game!.visionRegion(id, { x, y, width, height }, overlays);
       this.logs.add(
         id,
         "vision",
@@ -452,20 +445,14 @@ export class Arena {
         data: {
           ...data,
           ...(preview ? { nukePreview: preview.metadata } : {}),
-          image: {
-            tick: observation.tick,
-            width: frame.width,
-            height: frame.height,
-            region: frame.region,
-            mapPixels: frame.mapPixels,
-          },
+          image: imageMetadata(frame, observation.tick),
         },
         images: [frame],
       };
     }
     if (name !== "act") throw new Error("Unknown game tool.");
     try {
-      const result = await this.actions.get(id)!.submit(
+      const result = await submitActions(
         args,
         async (intent, attackRatio) => {
           const result = await this.game!.act(id, intent, attackRatio);
@@ -483,34 +470,28 @@ export class Arena {
           );
         },
       );
+      if ("results" in result)
+        for (const submitted of result.results!)
+          if (!submitted.accepted)
+            this.logs.add(
+              id,
+              "tool_error",
+              `${submitted.intent.type}: ${submitted.error}`,
+            );
       return { data: result };
     } catch (error) {
-      if (error instanceof ActionLimitError) {
-        this.halted.add(id);
-        const player = this.player(id);
-        if (player.threadId)
-          void this.runtime!.interrupt(player.threadId).catch(() => {});
-      }
-      if (!(error instanceof ZodError)) throw error;
-      const failures = (this.invalidActions.get(id) ?? 0) + 1;
-      this.invalidActions.set(id, failures);
-      this.logs.add(
-        id,
-        "tool_error",
-        "The act arguments did not match the native intent schema.",
-      );
-      if (failures >= 2) {
-        this.halted.add(id);
-        const player = this.player(id);
-        if (player.threadId)
-          void this.runtime!.interrupt(player.threadId).catch(() => {});
-      }
-      throw Object.assign(
-        new Error(
-          "Invalid act arguments. Supply intent or 1..2 intents, nextDecisionSeconds from 1 to 10, or both. attackRatio requires actions.",
-        ),
-        { cause: error },
-      );
+      const text =
+        error instanceof z.ZodError
+          ? error.issues
+              .slice(0, 3)
+              .map(
+                (issue) =>
+                  `${issue.path.map(String).join(".") || "act"}: ${issue.message}`,
+              )
+              .join(". ")
+          : message(error);
+      this.logs.add(id, "tool_error", text);
+      throw Object.assign(new Error(text), { cause: error });
     }
   }
 
@@ -520,9 +501,6 @@ export class Arena {
     const player = this.player(id);
     if (!player.alive) return;
     this.halted.delete(id);
-    this.calls.set(id, 0);
-    this.invalidActions.set(id, 0);
-    this.actions.set(id, new ActionDecision());
     player.status = "thinking";
     let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
@@ -538,15 +516,19 @@ export class Arena {
       } else {
         const vision = await this.game!.vision(id);
         if (this.state.phase !== "running" || this.halted.has(id)) return;
+        const includeOverview =
+          !vision.tactical ||
+          Date.now() - (this.overviewAt.get(id) ?? -Infinity) >= 60_000;
         const frames = [
-          vision.overview,
+          ...(includeOverview ? [vision.overview] : []),
           ...(vision.tactical ? [vision.tactical] : []),
         ];
+        if (includeOverview) this.overviewAt.set(id, Date.now());
         for (const [index, frame] of frames.entries())
           this.logs.add(
             id,
             "vision",
-            `${index === 0 ? "Overview" : "Tactical"} map at tick ${vision.tick}.`,
+            `${includeOverview && index === 0 ? "Overview" : "Tactical"} map at tick ${vision.tick}.`,
             {
               tick: vision.tick,
               region: frame.region,
@@ -560,28 +542,20 @@ export class Arena {
         this.suppliedTicks.set(id, observation.tick);
         const text = JSON.stringify({
           ...projectDecisionObservation(observation),
-          images: frames.map((frame) => ({
-            tick: vision.tick,
-            width: frame.width,
-            height: frame.height,
-            region: frame.region,
-            mapPixels: frame.mapPixels,
-          })),
+          ...(this.strategyNotes.has(id)
+            ? { strategyNote: this.strategyNotes.get(id) }
+            : {}),
+          images: frames.map((frame) => imageMetadata(frame, vision.tick)),
         });
-        timeout = setTimeout(
-          () => {
-            this.halted.add(id);
-            this.logs.add(
-              id,
-              "limit",
-              "The decision time limit ended this turn.",
-            );
-            void this.runtime!.interrupt(player.threadId!).catch(() => {});
-          },
-          this.state.settings.mode === "opencode"
-            ? OPENCODE_TURN_TIMEOUT_MS
-            : 90_000,
-        );
+        timeout = setTimeout(() => {
+          this.halted.add(id);
+          this.logs.add(
+            id,
+            "limit",
+            "The decision time limit ended this turn.",
+          );
+          void this.runtime!.interrupt(player.threadId!).catch(() => {});
+        }, 90_000);
         await this.runtime!.turn(
           player.threadId!,
           `Use this current state and map. The offense summary shows legal attacks, landings, and affordable missiles alongside construction options; weigh them against expansion and defense, keeping in mind that idle economy tends to lose ground to expanding rivals. Choose useful actions: ${text}`,
@@ -593,12 +567,6 @@ export class Arena {
       return this.requestedDelays.get(id);
     } catch (error) {
       if (this.state.phase === "running") {
-        // A stalled free-pool turn is routine, not fatal: skip it and let
-        // the queue schedule the next decision instead of halting the match.
-        if (isSkippableTurnError(message(error), this.state.settings.mode)) {
-          this.logs.add(id, "decision", `Skipped: ${message(error)}`);
-          return;
-        }
         player.error = message(error);
         this.logs.add(id, "error", player.error);
         this.state.error = player.error;

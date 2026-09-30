@@ -31,4 +31,4 @@ Native references:
 
 `think` records a short strategy note. An optional observation request uses the same public and private filters as `observe_world`.
 The tool does not change Luna's Low reasoning setting or add model turns by itself.
-It shares the existing four-call allowance, so simple decisions can submit actions directly.
+It has no fixed call allowance. Simple decisions can submit actions directly.

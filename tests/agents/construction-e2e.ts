@@ -1,5 +1,8 @@
 // Failure cases: unaffordable or invalid builds reported as accepted, missing
 // routine prices, Transport build hints, and accepted builds that never execute.
+// Build-site query failures: only one fresh Port appears, suggested ports collide
+// at native spacing, an explicit region returns distant sites, or an upgrade ID
+// is mislabeled as a new port. This check uses the native compact Europe map.
 import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
 import { AgentGame } from "../../src/agents/game/AgentGame";
@@ -155,6 +158,65 @@ await bridge.act("agent001", {
 advance(60);
 assert.equal(self.units(UnitType.Port).length, 1);
 assert.ok(!self.units(UnitType.Port)[0].isUnderConstruction());
+self.addGold(100_000_000n);
+for (let tile = 0; tile < game.width() * game.height(); tile++) {
+  if (game.isLand(tile) && game.isShore(tile) && !game.isImpassable(tile))
+    self.conquer(tile);
+}
+const queriedSites = builder.observe(
+  "agent001",
+  self,
+  0,
+  { buildType: UnitType.Port },
+  [],
+).map.buildSites;
+const freshPorts = queriedSites.filter((site) => site.upgradeId === false);
+assert(
+  freshPorts.length >= 5,
+  "The site query must expose at least five legal fresh Ports on this coast",
+);
+assert(queriedSites.length <= 12);
+for (const [index, site] of freshPorts.entries()) {
+  assert.equal(site.type, UnitType.Port);
+  assert.equal(site.x, game.x(site.tile));
+  assert.equal(site.y, game.y(site.tile));
+  assert.notEqual(self.canBuild(UnitType.Port, site.tile), false);
+  for (const previous of freshPorts.slice(0, index))
+    assert(
+      game.euclideanDistSquared(site.tile, previous.tile) >=
+        game.config().structureMinDist() ** 2,
+    );
+}
+const first = freshPorts[0];
+const siteRegion = {
+  x: game.x(first.tile),
+  y: game.y(first.tile),
+  width: 1,
+  height: 1,
+};
+const regionalSites = builder.observe(
+  "agent001",
+  self,
+  0,
+  { ...siteRegion, buildType: UnitType.Port },
+  [],
+).map.buildSites;
+assert(regionalSites.every((site) => site.tile === first.tile));
+const port = self.units(UnitType.Port)[0];
+const upgradeSites = builder.observe(
+  "agent001",
+  self,
+  0,
+  {
+    buildType: UnitType.Port,
+    x: game.x(port.tile()),
+    y: game.y(port.tile()),
+    width: 1,
+    height: 1,
+  },
+  [],
+).map.buildSites;
+assert(upgradeSites.some((site) => site.upgradeId === port.id()));
 await mkdir(".agent-arena", { recursive: true });
 await writeFile(
   ".agent-arena/construction-e2e.json",
@@ -163,14 +225,14 @@ await writeFile(
       result: "passed",
       initialGold,
       prices,
+      queriedSites,
+      regionalSites,
       tick: game.ticks(),
-      units: self
-        .units()
-        .map((unit) => ({
-          type: unit.type(),
-          level: unit.level(),
-          underConstruction: unit.isUnderConstruction(),
-        })),
+      units: self.units().map((unit) => ({
+        type: unit.type(),
+        level: unit.level(),
+        underConstruction: unit.isUnderConstruction(),
+      })),
     },
     null,
     2,

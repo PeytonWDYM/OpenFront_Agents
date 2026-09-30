@@ -119,9 +119,12 @@ A first City costs 125,000 gold and normally takes 20 ticks to complete.
 Later structure costs increase with native construction counts. Use the observed cost rather than a remembered price.
 Owned units expose their IDs and upgrade eligibility. `upgrade_structure`, `move_warship`, and `delete_unit` use those IDs.
 The engine enforces ownership, placement, affordability, and cooldowns for every action.
-Use `act({ "intents": [firstIntent, secondIntent] })` to submit one or two actions in one tool call.
+Use `act({ "intents": [firstIntent, secondIntent, ...] })` to submit multiple actions in one tool call.
 Choose `intent` or `intents`. The bridge validates the complete batch before it submits actions in order.
-Each action uses the existing two-action allowance for that decision. Batches return individual results and do not execute atomically.
+There is no artificial action-count allowance. Batches return individual results and do not execute atomically.
+For bulk upgrades, submit `upgrade_structure` with the structure's `unit`, numeric `unitId`, and `amount`, such as `5`.
+The native engine buys as many requested levels as its resource and construction rules permit.
+Use `observe_world({ "buildType": "Port", "sections": ["map"] })` to find multiple spaced build sites and upgrade IDs.
 
 The spawn briefing explains each major structure and unit without a fixed build order:
 

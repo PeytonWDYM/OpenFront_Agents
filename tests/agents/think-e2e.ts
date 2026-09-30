@@ -8,7 +8,6 @@ import { Arena, ThinkQuerySchema } from "../../src/agents/Arena";
 import { EFFORT, MODEL } from "../../src/agents/codex/config";
 import type { GameToolResult } from "../../src/agents/codex/index";
 import { validateToolSchemas } from "../../src/agents/codex/toolSchema";
-import { ActionDecision } from "../../src/agents/game/actionBatch";
 import { AgentGame } from "../../src/agents/game/AgentGame";
 import { LocalMapLoader } from "../../src/agents/game/LocalMapLoader";
 import { ObservationBuilder } from "../../src/agents/game/observation";
@@ -143,17 +142,11 @@ Reflect.set(arena, "state", {
   ],
 });
 Reflect.set(arena, "game", game);
-const actions = new ActionDecision();
-(Reflect.get(arena, "actions") as Map<string, ActionDecision>).set(
-  "agent001",
-  actions,
-);
 const tool: (
   id: string,
   name: string,
   args: unknown,
 ) => Promise<GameToolResult> = Reflect.get(arena, "tool").bind(arena);
-const calls = Reflect.get(arena, "calls") as Map<string, number>;
 const before = {
   tick: runner.game.ticks(),
   troops: self.troops(),
@@ -163,16 +156,10 @@ const note =
   "Wait for transport capacity. Inspect the coastal target before spending gold.";
 const acknowledgement = await tool("agent001", "think", { note });
 assert.deepEqual(acknowledgement.data, { recorded: true });
-assert.equal(calls.get("agent001"), 1);
 const focused = await tool("agent001", "think", {
   note: "Check public coast and my resources",
   observe: { playerId: target.id(), sections: ["self", "rivals", "events"] },
 });
-assert.equal(
-  calls.get("agent001"),
-  2,
-  "A think observation uses one outer call",
-);
 const focusedData = z
   .object({
     self: z.object({ playerId: z.string(), troops: z.number() }),
@@ -210,26 +197,24 @@ const preview = await tool("agent001", "think", {
     sections: ["map"],
   },
 });
-assert.equal(calls.get("agent001"), 4);
 assert.equal(preview.images?.length, 1);
 assert.ok(
   z
     .object({ nukePreview: z.object({ type: z.literal(UnitType.AtomBomb) }) })
     .safeParse(preview.data).success,
 );
-await assert.rejects(
-  tool("agent001", "think", { note: "Fifth call" }),
-  /four-tool-call limit/,
-);
+await tool("agent001", "think", {
+  note: "Keep the coastal target in my plan.",
+});
 assert.equal(
   arena.inspect("agent001").events.filter((event) => event.type === "think")
     .length,
-  3,
+  4,
 );
 assert.equal(
-  Reflect.get(actions, "actions"),
-  0,
-  "Think does not use the native-action budget",
+  (Reflect.get(arena, "strategyNotes") as Map<string, string>).get("agent001"),
+  "Keep the coastal target in my plan.",
+  "The latest strategy note remains available to later decisions",
 );
 assert.equal(
   (Reflect.get(arena, "requestedDelays") as Map<string, number>).size,
@@ -243,6 +228,32 @@ assert.deepEqual(
   },
   before,
 );
+// Invalid arguments and native rejections stay visible without a retry ceiling.
+await assert.rejects(tool("agent001", "act", { intent: { type: "wrong" } }));
+const invalidBuild = {
+  type: "build_unit",
+  unit: UnitType.TransportShip,
+  tile: self.spawnTile()!,
+};
+await assert.rejects(tool("agent001", "act", { intent: invalidBuild }));
+const rejectedBatch = await tool("agent001", "act", {
+  intents: [invalidBuild, invalidBuild, invalidBuild],
+});
+assert.equal(
+  z.object({ accepted: z.literal(false) }).safeParse(rejectedBatch.data)
+    .success,
+  true,
+);
+assert.equal(
+  arena
+    .inspect("agent001")
+    .events.filter((event) => event.type === "tool_error").length,
+  5,
+);
+assert.equal(
+  (Reflect.get(arena, "halted") as Set<string>).has("agent001"),
+  false,
+);
 await mkdir(".agent-arena", { recursive: true });
 await writeFile(
   ".agent-arena/think-e2e.json",
@@ -252,7 +263,7 @@ await writeFile(
       schemaBytes,
       model: MODEL,
       effort: EFFORT,
-      calls: calls.get("agent001"),
+      toolCalls: 5,
       before,
       focused: focused.data,
       preview: preview.data,

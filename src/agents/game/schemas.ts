@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { PlayerType } from "../../core/game/Game";
+import { PlayerType, Structures } from "../../core/game/Game";
 import {
   AllianceExtensionIntentSchema,
   AllianceRejectIntentSchema,
@@ -56,7 +56,7 @@ export const NextDecisionSecondsSchema = z.number().int().min(1).max(10);
 export const AgentToolInputSchema = z
   .object({
     intent: AgentActionSchema.optional(),
-    intents: z.array(AgentActionSchema).min(1).max(2).optional(),
+    intents: z.array(AgentActionSchema).min(1).optional(),
     attackRatio: AttackRatioSchema.optional().describe(
       "Fraction 0..1 of current troops for each intent. Persists. Overrides attack/boat troops.",
     ),
@@ -107,7 +107,6 @@ export const agentActionToolSchema = {
       type: "array",
       items: { $ref: "#/$defs/action" },
       minItems: 1,
-      maxItems: 2,
       description:
         "Choose intent or intents. Submit actions in order, not atomically.",
     },
@@ -168,6 +167,12 @@ export const ObserveQuerySchema = z
     width: z.number().int().min(1).max(32768).optional(),
     height: z.number().int().min(1).max(32768).optional(),
     sections: z.array(z.enum(observationSections)).optional(),
+    buildType: z
+      .enum(Structures.types)
+      .optional()
+      .describe(
+        "Find distinct legal build or upgrade sites for this structure type.",
+      ),
   })
   .strict();
 export type ObserveQuery = z.infer<typeof ObserveQuerySchema>;
@@ -327,9 +332,12 @@ export interface AgentObservation extends AgentMatchStats {
     buildSites: {
       type: string;
       tile: number;
+      x?: number;
+      y?: number;
       cost: number;
       upgradeId: number | false;
     }[];
+    buildSitesTruncated?: boolean;
     buildCosts: { type: string; cost: number }[];
     publicStructures?: {
       id: number;

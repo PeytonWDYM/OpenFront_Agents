@@ -35,7 +35,7 @@ export function hasLinkedIdentity(
 // The same question asked of a raw /users/@me result, where `false` means "no
 // session". Every identity gate in the client goes through this one function.
 //
-// It exists because the unwrapping used to be open-coded at each call site,
+// It exists because each call site previously repeated the unwrapping,
 // which let a second, Steam-blind copy of the predicate (the former
 // `hasLinkedAccount` in Api.ts) survive next to this one and lock Steam-only
 // players out of ranked matchmaking — OPE-199 / OPE-260. One door, one lock.
