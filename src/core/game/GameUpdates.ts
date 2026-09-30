@@ -106,6 +106,7 @@ export enum GameUpdateType {
   SpawnPhaseEnd,
   GamePaused,
   DonateEvent,
+  SpawnCountdown,
 }
 
 export type GameUpdate =
@@ -131,7 +132,8 @@ export type GameUpdate =
   | EmbargoUpdate
   | SpawnPhaseEndUpdate
   | GamePausedUpdate
-  | DonateEventUpdate;
+  | DonateEventUpdate
+  | SpawnCountdownUpdate;
 
 export interface BonusEventUpdate {
   type: GameUpdateType.BonusEvent;
@@ -374,6 +376,11 @@ export interface EmbargoUpdate {
 export interface SpawnPhaseEndUpdate {
   type: GameUpdateType.SpawnPhaseEnd;
   startTick: Tick;
+}
+
+export interface SpawnCountdownUpdate {
+  type: GameUpdateType.SpawnCountdown;
+  elapsedTicks: Tick;
 }
 
 export interface GamePausedUpdate {

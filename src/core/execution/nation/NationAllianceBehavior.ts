@@ -20,6 +20,7 @@ import {
 import { assertNever } from "../../Util";
 import { AllianceExtensionExecution } from "../alliance/AllianceExtensionExecution";
 import { AllianceRequestExecution } from "../alliance/AllianceRequestExecution";
+import { ticksWithoutSpawnWait } from "../Util";
 import {
   EMOJI_CONFUSED,
   EMOJI_HANDSHAKE,
@@ -64,7 +65,11 @@ export class NationAllianceBehavior {
       // Alliance Request intents created during the spawn phase are executed on
       // the first tick post-spawn phase. With the following condition we reject
       // all requests created during the spawn phase.
-      if (req.createdAt() <= this.game.config().numSpawnPhaseTurns() + 1) {
+      const spawnCutoff =
+        this.game.config().gameConfig().spawnReadyClientIDs === undefined
+          ? this.game.config().numSpawnPhaseTurns() + 1
+          : this.game.ticks() - Math.round(this.game.elapsedGameSeconds() * 10);
+      if (req.createdAt() <= spawnCutoff) {
         req.reject();
         continue;
       }
@@ -217,32 +222,21 @@ export class NationAllianceBehavior {
 
   private isEarlygame(): boolean {
     const spawnTicks = this.game.config().numSpawnPhaseTurns();
+    const ticks = ticksWithoutSpawnWait(this.game);
     const { difficulty } = this.game.config().gameConfig();
     switch (difficulty) {
       case Difficulty.Easy:
         // On easy, accept 90% in the first 5 minutes
-        return (
-          this.game.ticks() < 3000 + spawnTicks &&
-          this.random.nextInt(0, 100) >= 10
-        );
+        return ticks < 3000 + spawnTicks && this.random.nextInt(0, 100) >= 10;
       case Difficulty.Medium:
         // On medium, accept 70% in the first 3 minutes
-        return (
-          this.game.ticks() < 1800 + spawnTicks &&
-          this.random.nextInt(0, 100) >= 30
-        );
+        return ticks < 1800 + spawnTicks && this.random.nextInt(0, 100) >= 30;
       case Difficulty.Hard:
         // On hard, accept 50% in the first 3 minutes
-        return (
-          this.game.ticks() < 1800 + spawnTicks &&
-          this.random.nextInt(0, 100) >= 50
-        );
+        return ticks < 1800 + spawnTicks && this.random.nextInt(0, 100) >= 50;
       case Difficulty.Impossible:
         // On impossible, accept 30% in the first minute
-        return (
-          this.game.ticks() < 600 + spawnTicks &&
-          this.random.nextInt(0, 100) >= 70
-        );
+        return ticks < 600 + spawnTicks && this.random.nextInt(0, 100) >= 70;
       default:
         assertNever(difficulty);
     }

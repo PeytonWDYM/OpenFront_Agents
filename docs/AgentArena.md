@@ -35,6 +35,12 @@ Run `npm run dev:agents` to start the local game and arena. Run `npm run agents`
 Open `http://localhost:9000` and select **Agent lobby**.
 Choose the agent, tribe, and nation counts, then select **Play** or **Spectate**.
 Choose how many agents use medium reasoning. The remaining agents use low reasoning. Native player names include their reasoning level.
+The setup also includes the native map picker, map size, difficulty, team mode, and solo-game modifiers.
+Resource settings, construction speed, alliance duration, timers, and disabled units apply to the native game.
+Random map selection resolves once for the lobby. Each agent receives the resolved match settings with its instructions.
+Random spawn is off by default. Each agent chooses its spawn as its first decision.
+The spawn countdown waits for every agent to place a valid spawn, then runs for the normal duration.
+Agents that already spawned wait without more model decisions. Spectators and human players do not delay this readiness check.
 The arena creates the lobby, joins the native page, and starts after the server confirms your selected role.
 Select a player to read its decisions, actions, and token usage. Enable **Show diagnostics** to inspect raw runtime events and observations.
 Map images appear in the normal transcript. Reserved image frames prevent late image loads from moving the text.
@@ -45,6 +51,7 @@ Expand **Usage breakdown** to inspect input, cached input, uncached input, outpu
 Cache-write input appears when positive. Cached input belongs to input, and reasoning output belongs to output.
 Older running arenas keep their headline totals and report that detailed usage is unavailable until the runtime reloads.
 The sidecar listens on `127.0.0.1:9010`. The development client proxies `/api/agents` to it.
+Set `OPENFRONT_AGENT_PORT` for both processes to run a separate local arena. The default port remains 9010.
 
 The default has four agents, 100 tribes, and 52 nations on the Europe map.
 The agent ceiling is 200. The tribe and nation counts each range from zero to 400.
@@ -68,6 +75,9 @@ Decision feedback reports native resource changes, income, construction, troop c
 Inspector reads and tool observations do not consume this feedback. Net troop changes are not combat losses.
 Agents can request focused data when they need exact tiles, costs, or communication choices.
 Each decision includes current build prices, including units the agent cannot yet afford.
+Port queries describe owned coastal land, required water access, native spacing, and construction time.
+With images enabled, Port queries mark candidate sites as P1 through P12 and return their exact tile IDs.
+Ports and Factories share rising prices. Earlier purchases can exhaust gold or block a later site in the same batch.
 The action bridge checks native build legality before submission. Invalid builds report the required gold and current balance.
 Troop transports use `boat`, so they do not appear as `build_unit` placement hints.
 They also receive native victory progress and a short public leaderboard. A leaderboard query returns all living players and scoreboard columns.
@@ -86,6 +96,9 @@ The player keeps that ratio for later attacks with null troops.
 An explicit troop count applies when the call omits `attackRatio`.
 The inspector shows the same decision images. Frame files remain under `.agent-arena/frames/`.
 Incoming attacks, nukes, chat, and diplomacy can trigger an earlier decision after a five-second cooldown.
+Each alliance gets one renewal reminder per expiry time when native renewal becomes available.
+Agents choose whether to renew, let the alliance expire, or betray. Ignoring renewal carries no penalty.
+Breaking an active alliance normally causes a 30-second traitor penalty. Observations report its remaining ticks.
 Actual nuclear impacts also wake affected agents. Native elimination updates immediately halt the eliminated agent.
 Events during a decision schedule one fresh decision. Outgoing actions and broadcast emoji do not trigger another decision.
 The arena reports token usage without a configured token limit. Real subscription quota and rate limits still pause decisions.
@@ -103,6 +116,11 @@ It checks pause, resume, stop, settings, and localhost request boundaries.
 It writes a repeatable report to `.agent-arena/e2e-report.json`.
 Set `AGENT_E2E_COUNT=32` for a larger local check.
 Run `node node_modules/tsx/dist/cli.mjs tests/agents/aggression-e2e.ts` to check action combinations, streak tracking, and missile readiness on the real engine.
+Run `node node_modules/tsx/dist/cli.mjs tests/agents/lobby-options-e2e.ts` against the current local server to verify native settings and manual spawn.
+The `alliance-e2e.ts` and `port-placement-e2e.ts` scripts in the same directory verify native diplomacy and placement without model calls.
+Run `node tests/agents/lobby-options-ui-e2e.mjs` for desktop and mobile setup checks. `OPENFRONT_URL` selects the frontend.
+Set `PLAYWRIGHT_PACKAGE` to an installed Playwright package path if it is not available in the repository.
+Each check saves its report or screenshots under `.agent-arena/`.
 Real Codex verification requires explicit `AGENT_E2E_CODEX=1`. It uses one Luna player and pauses after one decision.
 The test driver pauses after the first model decision and stops the arena during cleanup.
 Set `AGENT_E2E_COUNT` only when an explicit test allowance permits a larger Codex check.

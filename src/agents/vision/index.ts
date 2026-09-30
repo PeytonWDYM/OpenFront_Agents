@@ -2,6 +2,8 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { Game, Player, PlayerType, UnitType } from "../../core/game/Game";
 import { NukePreview, samCoverage, trajectoryPoint } from "../game/nukePreview";
+import type { AgentObservation } from "../game/schemas";
+import { drawPortBuildSites, PortSiteMarker } from "./buildSites";
 import { drawUnitMarkers, TradeTrafficMarker } from "./markers";
 import { PlayerMarker, publicUnitMarkers } from "./metadata";
 import {
@@ -22,6 +24,7 @@ export type MapImage = {
   region: Region;
   mapPixels: Region;
   tradeTraffic?: TradeTrafficMarker[];
+  buildSites?: PortSiteMarker[];
   detail: "high";
   overlays: VisionLayers;
   players: PlayerMarker[];
@@ -38,6 +41,7 @@ type Frame = {
   region: Region;
   mapPixels: Region;
   tradeTraffic?: TradeTrafficMarker[];
+  buildSites?: PortSiteMarker[];
   overlays: VisionLayers;
   players: PlayerMarker[];
   units: ReturnType<typeof publicUnitMarkers>["units"];
@@ -113,8 +117,9 @@ function draw(
   self?: Player,
   preview?: NukePreview,
   overlays = resolveOverlays(),
+  buildSites?: AgentObservation["map"]["buildSites"],
 ): Frame {
-  const footer = preview ? 88 : 66;
+  const footer = preview || buildSites ? 88 : 66;
   const scale = Math.min(
     (limit - 44) / region.width,
     (limit - footer) / region.height,
@@ -448,6 +453,9 @@ function draw(
   const units = overlays.units
     ? publicUnitMarkers(game, region, self)
     : { units: [], unitCount: 0 };
+  const siteMarkers = buildSites
+    ? drawPortBuildSites(raster, game, region, mapPixels, buildSites)
+    : undefined;
   return {
     raster,
     region,
@@ -455,6 +463,7 @@ function draw(
     overlays,
     players: playerMarkers,
     ...units,
+    ...(siteMarkers ? { buildSites: siteMarkers } : {}),
     ...(self && (overlays.units || overlays.tradeRoutes)
       ? { tradeTraffic }
       : {}),
@@ -539,9 +548,11 @@ export class MapImages {
     player: Player,
     region: Region,
     options?: VisionOverlays,
+    buildSites?: AgentObservation["map"]["buildSites"],
   ): Promise<MapImage> {
     const tick = game.ticks();
     const overlays = resolveOverlays(options);
+    const portSites = options === false ? undefined : buildSites;
     return this.save(
       draw(
         game,
@@ -551,8 +562,9 @@ export class MapImages {
         player,
         undefined,
         overlays,
+        portSites,
       ),
-      `region-${player.smallID()}-${tick}-${region.x}-${region.y}-${region.width}-${region.height}-${overlayKey(overlays)}.png`,
+      `region-${player.smallID()}-${tick}-${region.x}-${region.y}-${region.width}-${region.height}-${overlayKey(overlays)}${portSites ? "-ports" : ""}.png`,
     );
   }
 
@@ -599,6 +611,7 @@ export class MapImages {
       region,
       mapPixels,
       tradeTraffic,
+      buildSites,
       overlays,
       players,
       units,
@@ -621,6 +634,7 @@ export class MapImages {
       units,
       unitCount,
       ...(tradeTraffic ? { tradeTraffic } : {}),
+      ...(buildSites ? { buildSites } : {}),
     };
   }
 }

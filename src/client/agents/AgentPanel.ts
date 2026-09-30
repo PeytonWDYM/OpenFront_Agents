@@ -9,11 +9,7 @@ import {
   agentRequest,
 } from "./AgentApi";
 import { agentControls } from "./AgentControls";
-import {
-  AgentRole,
-  agentLobbyForm,
-  defaultAgentSettings,
-} from "./AgentLobbyForm";
+import { AgentRole, defaultAgentSettings } from "./AgentLobbyForm";
 import { agentPanelStyles } from "./AgentPanelStyles";
 import { agentPlayerList } from "./AgentPlayerList";
 import { agentTranscript, agentTranscriptControls } from "./AgentTranscript";
@@ -468,7 +464,8 @@ export class AgentPanel extends LitElement {
       </button>`;
     return html`
       <section
-        class="panel ${!this.showSetup && this.selectedId !== null
+        class="panel ${this.showSetup ? "setup" : ""} ${!this.showSetup &&
+        this.selectedId !== null
           ? "inspecting"
           : ""}"
         aria-label=${translateText("agents.title")}
@@ -490,11 +487,12 @@ export class AgentPanel extends LitElement {
                       : "agents.auth_required",
                   )}
                 </p>
-                ${agentLobbyForm(
-                  this.lobby?.settings ?? defaultAgentSettings,
-                  this.busy,
-                  (settings, role) => void this.createAndJoin(settings, role),
-                )}
+                <agent-lobby-form
+                  .settings=${this.lobby?.settings ?? defaultAgentSettings}
+                  .busy=${this.busy}
+                  .onCreate=${(settings: AgentSettings, role: AgentRole) =>
+                    void this.createAndJoin(settings, role)}
+                ></agent-lobby-form>
               `
             : this.lobby
               ? this.renderLobby(this.lobby)

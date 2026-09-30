@@ -8,10 +8,7 @@ import {
 } from "../../core/Schemas";
 import {
   Game,
-  GameMapSize,
   GameMapType,
-  GameMode,
-  GameType,
   Player,
   PlayerBuildable,
   UnitType,
@@ -26,6 +23,7 @@ import { MapImages, playerTerritoryRegion } from "../vision";
 import { VisionOverlays } from "../vision/options";
 import { LocalMapLoader } from "./LocalMapLoader";
 import { PlayerSocket } from "./PlayerSocket";
+import { agentGameConfig, AgentGameConfigOptions } from "./config";
 import { projectDecisionObservation } from "./decision";
 import { playerEvents } from "./events";
 import { DecisionFeedback } from "./feedback";
@@ -36,6 +34,7 @@ import {
   AgentActionSchema,
   AgentEvent,
   AgentGameEvent,
+  AgentObservation,
   AgentPlayer,
   AttackRatioSchema,
   ObserveQuery,
@@ -103,24 +102,25 @@ const LobbyResponseSchema = z.object({
   workerIndex: z.number().int().min(0).max(1),
 });
 
-export interface AgentGameOptions {
+export interface AgentGameOptions extends AgentGameConfigOptions {
   agentCount: number;
   mediumAgentCount?: number;
   tribeCount?: number;
   nationCount?: number;
   map?: GameMapType;
-  randomSpawn?: boolean;
   onEvent?: (event: AgentGameEvent) => void;
 }
 
 /** A private local lobby with normal player sockets and one native simulation mirror. */
 export class AgentGame {
+  readonly config;
   private seats: PlayerSocket[] = [];
   private runner?: GameRunner;
   private observations?: ObservationBuilder;
   private feedback?: DecisionFeedback;
   private histories = new Map<string, AgentEvent[]>();
   private incomingAttacks = new Map<string, Set<string>>();
+  private allianceReminders = new Map<string, Map<number, number>>();
   private attackRatios = new Map<string, number>();
   private buildStreaks = new Map<string, number>();
   private mapImages?: MapImages;
@@ -133,6 +133,10 @@ export class AgentGame {
   private closed = false;
 
   constructor(private options: AgentGameOptions) {
+    this.config = agentGameConfig({
+      ...options,
+      gameMap: options.map ?? options.gameMap,
+    });
     z.number().int().min(1).max(400).parse(options.agentCount);
     z.number()
       .int()
@@ -178,19 +182,8 @@ export class AgentGame {
 
   async create(): Promise<{ gameId: string; workerId: number }> {
     if (this.gameId_) throw new Error("The agent lobby already exists");
-    const nationCount = this.options.nationCount ?? 52;
     const lobby = LobbyResponseSchema.parse(
-      await this.admin("/api/adminbot/create_game", {
-        gameMap: this.options.map ?? GameMapType.Europe,
-        gameMapSize: GameMapSize.Compact,
-        gameType: GameType.Private,
-        gameMode: GameMode.FFA,
-        bots: this.options.tribeCount ?? 100,
-        nations: nationCount === 0 ? "disabled" : nationCount,
-        randomSpawn: this.options.randomSpawn ?? true,
-        donateGold: true,
-        donateTroops: true,
-      }),
+      await this.admin("/api/adminbot/create_game", this.config),
     );
     this.gameId_ = lobby.gameID;
     this.mapImages = new MapImages(this.gameId_);
@@ -209,6 +202,7 @@ export class AgentGame {
       this.seats.push(seat);
       this.histories.set(id, []);
       this.incomingAttacks.set(id, new Set());
+      this.allianceReminders.set(id, new Map());
       this.attackRatios.set(id, 0.2);
       this.buildStreaks.set(id, 0);
     }
@@ -227,6 +221,13 @@ export class AgentGame {
         ),
       ),
     );
+    if (!this.config.randomSpawn) {
+      this.config.spawnReadyClientIDs = this.seats.map((seat) => seat.clientId);
+      await this.admin(`/api/adminbot/game/${this.gameId_}/intent`, {
+        type: "update_game_config",
+        config: this.config,
+      });
+    }
     this.options.onEvent?.({
       type: "lobby_created",
       tick: 0,
@@ -331,6 +332,7 @@ export class AgentGame {
         player,
         update.updates,
         this.incomingAttacks.get(seat.id)!,
+        this.allianceReminders.get(seat.id)!,
       );
       this.feedback!.recordEvents(player, events);
       const history = this.histories.get(seat.id)!;
@@ -423,12 +425,14 @@ export class AgentGame {
     agentId: string,
     region: { x: number; y: number; width: number; height: number },
     overlays?: VisionOverlays,
+    buildSites?: AgentObservation["map"]["buildSites"],
   ) {
     return this.mapImages!.renderRegion(
       this.runner!.game,
       this.player(agentId),
       region,
       overlays,
+      buildSites,
     );
   }
 
@@ -486,7 +490,7 @@ export class AgentGame {
         player.canBuild(intent.unit, intent.tile) === false
       )
         throw new Error(
-          `Cannot build ${intent.unit} at tile ${intent.tile}. Required gold: ${game.unitInfo(intent.unit).cost(game, player)}; available: ${player.gold()}. Use a current matching buildSite or inspect the target region.`,
+          `Cannot build ${intent.unit} at tile ${intent.tile}. Required gold: ${game.unitInfo(intent.unit).cost(game, player)}; available: ${player.gold()}. Use a current matching buildSite or inspect the target region.${intent.unit === UnitType.Port ? " Ports require owned coastal land beside water and spacing from structures. Use buildSites.tile, not image x/y." : ""}`,
         );
     }
     if (

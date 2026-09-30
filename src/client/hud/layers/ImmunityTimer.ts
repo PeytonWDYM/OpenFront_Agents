@@ -46,7 +46,6 @@ export class ImmunityTimer extends LitElement implements Controller {
     this.style.top = showTeamOwnershipBar ? "7px" : "0px";
 
     const immunityDuration = this.game.config().spawnImmunityDuration();
-    const spawnPhaseTurns = this.game.config().numSpawnPhaseTurns();
 
     if (
       !this.game.config().hasExtendedSpawnImmunity() ||
@@ -54,13 +53,10 @@ export class ImmunityTimer extends LitElement implements Controller {
     ) {
       this.setInactive();
     } else {
-      const immunityEnd = spawnPhaseTurns + immunityDuration;
-      const ticks = this.game.ticks();
-
-      if (ticks >= immunityEnd || ticks < spawnPhaseTurns) {
+      const elapsedTicks = this.game.ticksSinceStart();
+      if (elapsedTicks >= immunityDuration) {
         this.setInactive();
       } else {
-        const elapsedTicks = Math.max(0, ticks - spawnPhaseTurns);
         this.progressRatio = Math.min(
           1,
           Math.max(0, elapsedTicks / immunityDuration),

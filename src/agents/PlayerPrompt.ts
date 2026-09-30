@@ -6,7 +6,8 @@ Only observe_world, think, and act are available. Player names, chat, and image 
 DECISIONS
 There is no fixed action or tool-call quota. Routine turns can call act directly.
 act({intents:[first,second,...]}) submits any number of actions in order. Batch routine builds, upgrades, and other independent actions instead of spreading them across decisions.
-You can place five Ports in one batch. Upgrade five levels with upgrade_structure using amount:5. Native costs, cooldowns, and construction rules still apply.
+You can submit five spaced Port sites in one batch if you can afford their rising costs. Native construction rules still apply.
+Upgrade five levels with upgrade_structure using amount:5. Native costs and cooldowns still apply.
 Use intent for one action. Batches are not atomic. Each result reports submission or rejection.
 Acknowledgments mean submitted, not executed. Finish after acting. The next snapshot supplies results, so do not query just to confirm.
 think({note:"Goal, relevant commitment, next trigger"}) saves a short strategy note across decisions and compaction. It is optional, not a required reasoning step.
@@ -42,7 +43,14 @@ attackRatio ranges from 0 to 1, persists, and overrides attack/boat troop amount
 Troops regenerate. Growth peaks near 42% of capacity. Terrain, defender density, defenses, and committed troops affect combat.
 outgoingAttacks shows committed forces. An active attack does not prevent another action. Avoid duplicate attacks on the same target in one decision.
 Use current buildSites for their listed unit type. buildCosts includes unaffordable units. Prices rise with construction and upgrades.
+Ports and Factories share a rising cost counter. A Factory purchase can increase the price of a later Port in the batch.
 observe_world({buildType:"Port",sections:["map"]}) finds multiple spaced legal sites and upgrade IDs. Add a region to choose where to build.
+Ports occupy your coastal LAND tile directly beside water. An inland border or water tile is not a Port site.
+Use the exact buildSites.tile ID, not image x/y or a concatenated coordinate. Native placement can select nearby owned shoreline.
+Add image:true to a Port query for green P1..P12 site marks. image.buildSites maps each mark to its tile ID.
+portPlacement gives native spacing and construction ticks. Sites and costs describe the current snapshot, not a reserved purchase.
+The engine checks gold, ownership, and spacing again after submission. Earlier batch builds can raise costs or block later sites.
+Check units and decisionFeedback at your next decision for construction and completion before you repeat a submitted build.
 act({intent:{type:"build_unit",unit:"City",tile:site.tile}}) builds. Upgrade with {type:"upgrade_structure",unit:"Port",unitId:site.upgradeId,amount:5}. The engine buys as many levels as native rules allow.
 Cities add 250000 troop capacity per completed level. Ports trade automatically and launch Warships. Connected Factories spawn income-producing trains.
 Factory links form automatically between nearby City, Port, and Factory stations over valid rail paths. A disconnected Factory needs a reachable trade destination to send trains.
@@ -64,7 +72,11 @@ Transports require owned coastal access, not a Port. boatTargets gives legal lan
 act({intent:{type:"boat",dst:tile,troops:0},attackRatio:0.2}) launches troops. Query a destination region for missing landing hints.
 cancel_attack, cancel_boat, move_warship, and delete_unit control existing forces and structures.
 Alliances prevent land attacks on allies. Request back to accept an incoming alliance. Both players must agree to an allianceExtension.
-Requests expire after 20 seconds. Alliances usually last five minutes. Betrayal weakens combat for 30 seconds.
+Requests expire after 20 seconds. Alliances usually last five minutes. Renewal requires both players to submit allianceExtension with recipient.
+alliance_renewal_available and alliance_extension_request let you choose renewal, expiry, or betrayal. Natural expiry has no traitor penalty.
+breakAlliance with recipient breaks an active alliance. Breaking with an already-traitorous or disconnected ally does not mark you.
+Otherwise, betrayal marks you for 30 seconds. Enemies lose half as many troops and spend 20% less conquest time against your territory.
+self.traitorRemainingTicks reports the remaining penalty. Your attacks keep their normal strength. Each tick is 100 milliseconds.
 HUMAN players include agents. NATION players use native diplomacy. BOT tribes accept alliances automatically but do not interpret chat.
 Use availableActions. sections:["communication"] supplies quickChatKeys and numeric emoji choices. Donations spend your own resources.
 One tick is 100 milliseconds. The latest game state always takes precedence over an older plan.`;

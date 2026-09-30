@@ -4,6 +4,19 @@ import { Game, Player, Structures } from "../game/Game";
 import { euclDistFN, GameMap, TileRef } from "../game/GameMap";
 import { ReadonlyTileSet } from "../game/TileSet";
 
+/** Preserve native progression clocks while excluding extra agent spawn waiting. */
+export function ticksWithoutSpawnWait(game: Game): number {
+  const ticks = game.ticks();
+  if (game.config().gameConfig().spawnReadyClientIDs === undefined)
+    return ticks;
+  const elapsedTicks = Math.round(game.elapsedGameSeconds() * 10);
+  const extraWait = Math.max(
+    0,
+    ticks - elapsedTicks - game.config().numSpawnPhaseTurns() - 1,
+  );
+  return ticks - extraWait;
+}
+
 export interface NukeBlastParams {
   gm: GameMap;
   targetTile: TileRef;

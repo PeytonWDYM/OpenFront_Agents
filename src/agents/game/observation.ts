@@ -352,6 +352,7 @@ export class ObservationBuilder {
         troops: Math.floor(player.troops()),
         attackRatio,
         gold: Number(player.gold()),
+        traitorRemainingTicks: player.getTraitorRemainingTicks(),
         maxTroops: Math.floor(game.config().maxTroops(player)),
         tiles: player.numTilesOwned(),
         canSendEmojiAllPlayers: player.canSendEmoji(AllPlayers),
@@ -467,6 +468,17 @@ export class ObservationBuilder {
         ),
         ...(requestedSites
           ? { buildSitesTruncated: requestedSites.truncated }
+          : {}),
+        ...(query.buildType === UnitType.Port
+          ? {
+              portPlacement: {
+                terrain: "owned coastal land" as const,
+                requiresAdjacentWater: true as const,
+                minStructureDistance: game.config().structureMinDist(),
+                constructionTicks:
+                  game.unitInfo(UnitType.Port).constructionDuration ?? 0,
+              },
+            }
           : {}),
         buildCosts: buildableTypes.map((type) => ({
           type,
