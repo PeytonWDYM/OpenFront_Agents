@@ -22,6 +22,7 @@ import {
   GameUpdateViewData,
 } from "../../core/game/GameUpdates";
 import { MapImages, playerTerritoryRegion } from "../vision";
+import { VisionOverlays } from "../vision/options";
 import { LocalMapLoader } from "./LocalMapLoader";
 import { PlayerSocket } from "./PlayerSocket";
 import { projectDecisionObservation } from "./decision";
@@ -385,19 +386,21 @@ export class AgentGame {
     return projectDecisionObservation(this.observe(agentId));
   }
 
-  async vision(agentId: string) {
+  async vision(agentId: string, overlays?: VisionOverlays) {
     const player = this.player(agentId);
-    return this.mapImages!.render(this.runner!.game, player);
+    return this.mapImages!.render(this.runner!.game, player, overlays);
   }
 
   async visionRegion(
     agentId: string,
     region: { x: number; y: number; width: number; height: number },
+    overlays?: VisionOverlays,
   ) {
     return this.mapImages!.renderRegion(
       this.runner!.game,
       this.player(agentId),
       region,
+      overlays,
     );
   }
 

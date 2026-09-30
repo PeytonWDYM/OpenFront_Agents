@@ -9,6 +9,7 @@ import {
   Structures,
   UnitType,
 } from "../../core/game/Game";
+import { requestedBuildSites } from "./buildSites";
 import { MatchStats } from "./matchStats";
 import { publicTradeTraffic, warshipBuildSite } from "./naval";
 import { AgentEvent, AgentObservation, ObserveQuery } from "./schemas";
@@ -151,9 +152,17 @@ export class ObservationBuilder {
       if (buildSamples.length >= 12) break;
     }
     const buildSites: AgentObservation["map"]["buildSites"] = [];
-    const warship = warshipBuildSite(game, player, reference);
+    const requestedSites =
+      query.buildType === undefined
+        ? undefined
+        : requestedBuildSites(game, player, query);
+    const warship =
+      query.buildType === undefined
+        ? warshipBuildSite(game, player, reference)
+        : undefined;
     if (warship) buildSites.push(warship);
     for (const tile of buildSamples) {
+      if (requestedSites) break;
       for (const buildable of player.buildableUnits(tile, buildableTypes)) {
         if (buildable.canBuild === false && buildable.canUpgrade === false)
           continue;
@@ -428,7 +437,12 @@ export class ObservationBuilder {
                 })),
             }
           : {}),
-        buildSites: buildSites.slice(0, 8),
+        buildSites: (requestedSites?.sites ?? buildSites.slice(0, 8)).map(
+          (site) => ({ ...site, ...point(site.tile) }),
+        ),
+        ...(requestedSites
+          ? { buildSitesTruncated: requestedSites.truncated }
+          : {}),
         buildCosts: buildableTypes.map((type) => ({
           type,
           cost: Number(game.config().unitInfo(type).cost(game, player)),

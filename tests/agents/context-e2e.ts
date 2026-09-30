@@ -16,7 +16,7 @@ try {
   const isolation = z
     .object({
       contextWindow: z.literal(150_000),
-      autoCompactTokenLimit: z.literal(150_000),
+      autoCompactTokenLimit: z.literal(24_000),
       autoCompactTokenLimitScope: z.literal("total"),
     })
     .parse(
@@ -44,7 +44,7 @@ try {
       model: z.literal("gpt-6-luna"),
       effort: z.literal("low"),
       contextWindow: z.literal(150_000),
-      autoCompactTokenLimit: z.literal(150_000),
+      autoCompactTokenLimit: z.literal(24_000),
       autoCompactTokenLimitScope: z.literal("total"),
       instructionSources: z.array(z.string()).length(0),
     })

@@ -14,6 +14,8 @@ export const MODEL = "gpt-6-luna";
 export const EFFORT = "low";
 export const VERSION = "0.158.0";
 export const CONTEXT_WINDOW = 150_000;
+// Compact replayed history early while keeping the native model window and thread.
+export const AUTO_COMPACT_TOKEN_LIMIT = 24_000;
 
 const cachedModel = z
   .object({
@@ -101,7 +103,7 @@ export async function runtimeConfiguration() {
     model: JSON.stringify(MODEL),
     model_reasoning_effort: JSON.stringify(EFFORT),
     model_context_window: String(CONTEXT_WINDOW),
-    model_auto_compact_token_limit: String(CONTEXT_WINDOW),
+    model_auto_compact_token_limit: String(AUTO_COMPACT_TOKEN_LIMIT),
     model_auto_compact_token_limit_scope: '"total"',
     model_catalog_json: JSON.stringify(modelCatalog),
     approval_policy: '"never"',

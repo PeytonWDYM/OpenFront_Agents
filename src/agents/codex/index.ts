@@ -2,6 +2,7 @@ import { appendFile, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 import {
+  AUTO_COMPACT_TOKEN_LIMIT,
   CONTEXT_WINDOW,
   EFFORT,
   MODEL,
@@ -165,7 +166,7 @@ export class CodexRuntime {
     const context = z
       .object({
         model_context_window: z.literal(CONTEXT_WINDOW),
-        model_auto_compact_token_limit: z.literal(CONTEXT_WINDOW),
+        model_auto_compact_token_limit: z.literal(AUTO_COMPACT_TOKEN_LIMIT),
         model_auto_compact_token_limit_scope: z.literal("total"),
       })
       .parse(config);
@@ -273,7 +274,7 @@ export class CodexRuntime {
         config: {
           model_reasoning_effort: EFFORT,
           model_context_window: CONTEXT_WINDOW,
-          model_auto_compact_token_limit: CONTEXT_WINDOW,
+          model_auto_compact_token_limit: AUTO_COMPACT_TOKEN_LIMIT,
           model_auto_compact_token_limit_scope: "total",
         },
         baseInstructions: definition.prompt,
@@ -317,7 +318,7 @@ export class CodexRuntime {
           model: MODEL,
           effort: EFFORT,
           contextWindow: CONTEXT_WINDOW,
-          autoCompactTokenLimit: CONTEXT_WINDOW,
+          autoCompactTokenLimit: AUTO_COMPACT_TOKEN_LIMIT,
           autoCompactTokenLimitScope: "total",
           prompt: definition.prompt,
           tools: definition.tools,
@@ -331,7 +332,7 @@ export class CodexRuntime {
       model: result.model,
       effort: result.reasoningEffort,
       contextWindow: CONTEXT_WINDOW,
-      autoCompactTokenLimit: CONTEXT_WINDOW,
+      autoCompactTokenLimit: AUTO_COMPACT_TOKEN_LIMIT,
       autoCompactTokenLimitScope: "total",
       instructionSources: result.instructionSources,
       sandbox: result.sandbox.type,
@@ -352,10 +353,10 @@ export class CodexRuntime {
       environments: [],
       input: [
         { type: "text", text, text_elements: [] },
-        ...images.map(({ path }) => ({
+        ...images.map(({ path, detail }) => ({
           type: "localImage",
           path,
-          detail: "low",
+          detail: detail ?? "high",
         })),
       ],
     });

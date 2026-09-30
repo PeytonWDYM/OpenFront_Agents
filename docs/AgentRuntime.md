@@ -1,44 +1,6 @@
-# Local model runtimes
+# Local model runtime
 
-Agents play through either the Codex runtime or the OpenCode runtime.
-The lobby provider selector chooses per match. Scripted mode stays for
-deterministic verification only.
-
-## OpenCode runtime
-
-The runtime shells out to the user's own `opencode` binary, so any model
-already configured there can play. The default is Muse Spark 1.3 Free
-(`opencode/muse-spark-1.3-contributor-free`) at low reasoning
-(`--variant low`). Set `OPENFRONT_OPENCODE_MODEL` to `provider/model`
-to pin another model and `OPENFRONT_OPENCODE_VARIANT` for another effort.
-The runtime spawns one persistent `opencode serve` child per match on
-127.0.0.1 with a generated password, so turns are single HTTP round-trips
-instead of cold CLI boots. Set `OPENFRONT_OPENCODE_EXECUTABLE` to an
-explicit binary path (a fake serve works for offline tests).
-
-Each decision sends the player's own instructions plus the live snapshot and
-asks for a single JSON action object (`note`, `intent`/`intents`,
-`attackRatio`, `nextDecisionSeconds`). No harness strategy coaching is
-added; the only extra lines are the machine-readable reply envelope the
-parser needs. The runtime executes the returned think/act calls through
-the arena bridge, so the one-structure-build limit and the two-action
-budget apply to OpenCode players too. Bridge rejections come back as
-per-turn tool-error events instead of failing the turn. Map images from
-the current decision ride along as file attachments. Sessions rotate
-every twelve turns because every decision already carries the full
-snapshot, which bounds context debt and keeps the free pool fast.
-Pool throttles retry twice with backoff; stalled turns skip one decision
-instead of halting the match.
-
-`OpenCodeRuntime` exports `initialize()`, `createPlayer()`, `turn()`,
-`interrupt()`, `compact()`, `history()`, and `close()` with the same
-shape the arena uses for Codex. Token accounting stays with Codex;
-OpenCode usage is billed through the user's own opencode setup.
-
-Run `node node_modules/tsx/dist/cli.mjs tests/agents/opencode-e2e.ts`
-for the offline contract check. It uses a fake binary, so it makes no
-inference request. Its artifact records the parsed calls under
-`.agent-arena/opencode-e2e.json`.
+Agents play through the local Codex runtime. Scripted mode supports deterministic verification only.
 
 ## Local Codex runtime
 
@@ -73,10 +35,12 @@ A player retains the same thread across game decisions. Concurrent turns on that
 
 The verified Luna catalog includes text and image inputs. The runtime rejects catalogs without image support.
 Each decision sends the live game map and a small resource, action, and event summary.
-Codex receives PNG files through native `localImage` inputs with `low` image detail.
+Codex receives PNG files through native `localImage` inputs with `high` image detail so labels remain readable.
 The runtime retains native thread history and compaction for image turns.
 
 The renderer saves one shared world overview per tick and a tactical crop for each spawned player.
+Routine decisions attach the tactical crop. The overview is attached on the first decision and at least 60 seconds apart thereafter.
+An agent without a tactical crop receives an overview each decision. A tool query can request a fresh view at any time.
 The overview stays within 768 pixels. The tactical crop stays within 512 pixels.
 Frames show live terrain, territory colors, public player labels, buildings, and world coordinate axes.
 Labels use `H` for human slots, `N` for nations, and `T` for tribes, followed by the native small ID.
@@ -90,12 +54,11 @@ Frame files remain under `.agent-arena/frames/<gameId>` for inspection. Event lo
 
 Full history requires at least one user message. Before that message, use `history(threadId, false)` for thread metadata.
 Native Codex stores persistent sessions in the isolated home. The adapter does not replace native history with a summary buffer.
-Each new runtime sets native `model_context_window` and `model_auto_compact_token_limit` to 150,000, with scope `total`.
+Each new runtime sets native `model_context_window` to 150,000 and `model_auto_compact_token_limit` to 24,000, with scope `total`.
 Initialization verifies these settings through native `config/read`. Each player thread receives the same explicit settings.
 These settings limit active context. They do not limit lifetime tokens or game decisions.
-Codex 0.158.0 reserves model headroom and clamps total-scope automatic compaction to 90% of the context window.
-Luna's 95% usable-context setting gives a usable window of 142,500 tokens and an automatic compaction threshold of 135,000 tokens.
-This follows the native [context limits](https://github.com/openai/codex/blob/rust-v0.158.0/codex-rs/protocol/src/openai_models.rs).
+The earlier threshold bounds repeated history input while preserving the same native thread and compaction summary.
+The arena also resends the player's latest explicit `think` note with the live state. The player can replace this note as its plan changes.
 Codex handles compaction and persistent history. Manual compaction uses `thread/compact/start`.
 Existing runtimes retain their startup settings. Changing these settings does not change a running match.
 
@@ -113,7 +76,8 @@ It removes native shell, patch, clock, user-message, code mode, and multi-agent 
 This uses Codex's supported `model_catalog_json` setting. It does not change the remote model or provider.
 All player tools use app-server `dynamicTools` with direct function exposure.
 Players receive `observe_world`, `act`, and `think`. The `think` tool records a short strategy summary and can request a focused observation.
-It shares the same observation filters and four-call allowance. It does not change Low reasoning or submit game actions.
+It shares the same observation filters. It does not change low reasoning or submit game actions.
+There is no fixed tool-call or action-count quota. A 90-second deadline interrupts stalled decisions.
 Tool arguments arrive as `unknown`. The game bridge must validate arguments against its game contracts.
 Unknown tools and callback errors return failed tool results.
 Game tool callbacks return `{ data, images? }`. The runtime sends JSON data as native `inputText` content.

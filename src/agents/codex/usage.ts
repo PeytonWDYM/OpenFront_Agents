@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { open } from "node:fs/promises";
 import { z } from "zod";
 import { tokenUsage } from "./protocol";
 
@@ -25,6 +25,44 @@ const nativeRecord = z.object({
 });
 const rolloutEntry = z.object({ type: z.string(), payload: z.unknown() });
 
+/** Read recent ledger records without loading the player's image history. */
+async function latestUsageRecord(path: string) {
+  const file = await open(path, "r");
+  try {
+    const { size } = await file.stat();
+    let length = Math.min(size, 64 * 1024);
+    while (length > 0) {
+      const buffer = Buffer.alloc(length);
+      const start = size - length;
+      await file.read(buffer, 0, length, start);
+      const text = buffer.toString("utf8");
+      // The first line can start inside an image or a large checkpoint.
+      const lines = (start === 0 ? text : text.slice(text.indexOf("\n") + 1))
+        .trimEnd()
+        .split("\n");
+      for (let index = lines.length - 1; index >= 0; index--) {
+        if (!lines[index]) continue;
+        const entry = rolloutEntry.parse(JSON.parse(lines[index]));
+        const candidate =
+          entry.type === "token_usage_record"
+            ? entry.payload
+            : entry.type === "compacted"
+              ? z
+                  .object({ latest_token_usage_record: z.unknown().optional() })
+                  .parse(entry.payload).latest_token_usage_record
+              : undefined;
+        if (candidate !== undefined && candidate !== null)
+          return nativeRecord.parse(candidate);
+      }
+      if (length === size) break;
+      length = Math.min(size, length * 2);
+    }
+    throw new Error("The native rollout has no token usage record.");
+  } finally {
+    await file.close();
+  }
+}
+
 /** Native records include remote compaction usage omitted by the CLI's legacy RPC counter. */
 export class UsageAccounting {
   private reported = { ...emptyTotals };
@@ -40,41 +78,28 @@ export class UsageAccounting {
   }
 
   async reconcile(path: string, threadId: string) {
-    const lines = (await readFile(path, "utf8")).trim().split("\n");
-    for (let index = lines.length - 1; index >= 0; index--) {
-      const entry = rolloutEntry.parse(JSON.parse(lines[index]));
-      let candidate: unknown;
-      if (entry.type === "token_usage_record") candidate = entry.payload;
-      else if (entry.type === "compacted") {
-        candidate = z
-          .object({ latest_token_usage_record: z.unknown().optional() })
-          .parse(entry.payload).latest_token_usage_record;
-      }
-      if (candidate === undefined || candidate === null) continue;
-      const record = nativeRecord.parse(candidate);
-      if (record.thread_id !== threadId)
-        throw new Error("The native usage record belongs to another thread.");
-      const native = record.thread_token_usage;
-      const total: Totals = {
-        totalTokens: native.total_tokens,
-        inputTokens: native.input_tokens,
-        cachedInputTokens: native.cached_input_tokens,
-        cacheWriteInputTokens: native.cache_write_input_tokens,
-        outputTokens: native.output_tokens,
-        reasoningOutputTokens: native.reasoning_output_tokens,
-      };
-      const offset = { ...emptyTotals };
-      for (const key of Object.keys(total) as (keyof Totals)[]) {
-        offset[key] = total[key] - this.reported[key];
-        if (offset[key] < 0)
-          throw new Error("The native usage record is behind the RPC counter.");
-      }
-      // Recompute against the latest RPC totals so replay or counter catch-up cannot add usage twice.
-      this.offset = offset;
-      this.nativeAccounting = true;
-      return this.snapshot();
+    const record = await latestUsageRecord(path);
+    if (record.thread_id !== threadId)
+      throw new Error("The native usage record belongs to another thread.");
+    const native = record.thread_token_usage;
+    const total: Totals = {
+      totalTokens: native.total_tokens,
+      inputTokens: native.input_tokens,
+      cachedInputTokens: native.cached_input_tokens,
+      cacheWriteInputTokens: native.cache_write_input_tokens,
+      outputTokens: native.output_tokens,
+      reasoningOutputTokens: native.reasoning_output_tokens,
+    };
+    const offset = { ...emptyTotals };
+    for (const key of Object.keys(total) as (keyof Totals)[]) {
+      offset[key] = total[key] - this.reported[key];
+      if (offset[key] < 0)
+        throw new Error("The native usage record is behind the RPC counter.");
     }
-    throw new Error("The native rollout has no token usage record.");
+    // Recompute against the latest RPC totals so replay or counter catch-up cannot add usage twice.
+    this.offset = offset;
+    this.nativeAccounting = true;
+    return this.snapshot();
   }
 
   private snapshot() {

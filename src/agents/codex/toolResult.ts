@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 
-export type GameImage = { path: string };
+export type GameImage = { path: string; detail?: "low" | "high" | "auto" };
 export type GameToolResult = { data: unknown; images?: readonly GameImage[] };
 type ToolContent =
   | { type: "inputText"; text: string }

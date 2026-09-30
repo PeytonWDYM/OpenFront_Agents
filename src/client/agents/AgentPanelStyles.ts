@@ -34,6 +34,9 @@ export const agentPanelStyles = css`
     border-bottom: 1px solid #ffffff24;
     background: #1b2834;
   }
+  .panel.inspecting {
+    height: calc(100dvh - 24px);
+  }
   .header-main,
   .header-summary,
   .player-head,
@@ -133,6 +136,8 @@ export const agentPanelStyles = css`
     overflow-y: auto;
     padding: 12px;
     overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+    overflow-anchor: none;
   }
   button,
   input {
@@ -201,6 +206,16 @@ export const agentPanelStyles = css`
   .thread-controls {
     padding-top: 10px;
     border-top: 1px solid #ffffff18;
+  }
+  .diagnostics-control {
+    margin: 0;
+    width: 100%;
+    justify-content: flex-start;
+    color: #bcc7d1;
+    font-size: 12px;
+  }
+  .diagnostics-control input {
+    width: auto;
   }
   .stop-control {
     color: #ffcfca;
@@ -393,6 +408,9 @@ export const agentPanelStyles = css`
       max-height: calc(100dvh - 12px);
       max-width: calc(100vw - 12px);
       width: 320px;
+    }
+    .panel.inspecting {
+      height: calc(100dvh - 12px);
     }
     .panel-header,
     .body {

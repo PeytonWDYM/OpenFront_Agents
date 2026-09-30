@@ -59,7 +59,19 @@ const ships = owners.map((owner, index) => {
 });
 const images = new MapImages("synthetic-coast-naval-vision-e2e");
 const region = { x: 5, y: 0, width: 11, height: 16 };
-const frame = await images.renderRegion(game, self, region);
+const frame = await images.renderRegion(game, self, region, {
+  tradeRoutes: true,
+});
+// Independent layer failures: route cues disappear when unit markers are off.
+const routeOnly = await images.renderRegion(game, self, region, {
+  labels: false,
+  grid: false,
+  units: false,
+  tradeRoutes: true,
+});
+assert.equal(routeOnly.tradeTraffic?.length, 4);
+assert.deepEqual(routeOnly.units, []);
+assert(routeOnly.tradeTraffic?.every((ship) => ship.label === undefined));
 assert(frame.tradeTraffic, "Personal images must explain their trade labels");
 assert.equal(frame.tradeTraffic.length, 4);
 const colors = [

@@ -1,6 +1,8 @@
 import { html, nothing } from "lit";
+import { repeat } from "lit/directives/repeat.js";
 import { translateText } from "../Utils";
 import { AgentTranscript } from "./AgentApi";
+import { transcriptEntries } from "./TranscriptEvents";
 
 interface TranscriptControls {
   transcript: AgentTranscript | null;
@@ -9,6 +11,10 @@ interface TranscriptControls {
   fullThread: boolean;
   loadFull: () => void;
   compact: () => void;
+  diagnostics: boolean;
+  setDiagnostics: (enabled: boolean) => void;
+  following: boolean;
+  followLatest: () => void;
 }
 
 export function agentTranscriptControls({
@@ -18,9 +24,29 @@ export function agentTranscriptControls({
   fullThread,
   loadFull,
   compact,
+  diagnostics,
+  setDiagnostics,
+  following,
+  followLatest,
 }: TranscriptControls) {
   return html`
     <div class="toolbar thread-controls">
+      <label class="diagnostics-control">
+        <input
+          type="checkbox"
+          .checked=${diagnostics}
+          @change=${(event: Event) =>
+            setDiagnostics((event.target as HTMLInputElement).checked)}
+        />
+        ${translateText("agents.show_diagnostics")}
+      </label>
+      <button
+        class="latest-control"
+        ?disabled=${following}
+        @click=${followLatest}
+      >
+        ${translateText("agents.latest")}
+      </button>
       <button ?disabled=${busy} @click=${loadFull}>
         ${translateText(
           fullThread ? "agents.refresh_full" : "agents.load_full",
@@ -40,7 +66,11 @@ export function agentTranscriptControls({
 export function agentTranscript(
   transcript: AgentTranscript | null,
   fullThread: boolean,
+  diagnostics: boolean,
 ) {
+  const entries = transcript
+    ? transcriptEntries(transcript.events, diagnostics)
+    : [];
   return html`
     <section aria-label=${translateText("agents.transcript")}>
       ${transcript === null
@@ -60,42 +90,39 @@ export function agentTranscript(
                 )}
               </p>
             </details>
-            ${transcript.events.length === 0
+            ${entries.length === 0
               ? html`<p class="muted">${translateText("agents.no_events")}</p>`
-              : transcript.events.map((event) => {
-                  const text = event.text.trimStart();
-                  const structured =
-                    text.startsWith("{") || text.startsWith("[");
-                  return html`
-                    <article class="transcript-event">
-                      <div class="event-meta">
-                        <span class="event-type">${event.type}</span>
-                        <time datetime=${new Date(event.time).toISOString()}>
-                          ${new Date(event.time).toLocaleTimeString()}
-                        </time>
-                      </div>
-                      ${event.image
-                        ? html`<img
-                            class="vision-image"
-                            src=${event.image}
-                            alt=${translateText("agents.vision_image")}
-                            loading="lazy"
-                          />`
-                        : nothing}
-                      <p class="event-preview">
-                        ${structured
-                          ? translateText("agents.structured_event")
-                          : event.text}
-                      </p>
-                      <details class="event-details">
-                        <summary>
-                          ${translateText("agents.event_details")}
-                        </summary>
-                        <pre>${event.text}</pre>
-                      </details>
-                    </article>
-                  `;
-                })}
+              : repeat(
+                  entries,
+                  (entry) => entry.key,
+                  ({ key, event, preview, label }) => {
+                    return html`
+                      <article class="transcript-event" data-event-key=${key}>
+                        <div class="event-meta">
+                          <span class="event-type">${label}</span>
+                          <time datetime=${new Date(event.time).toISOString()}>
+                            ${new Date(event.time).toLocaleTimeString()}
+                          </time>
+                        </div>
+                        <p class="event-preview">${preview}</p>
+                        <details class="event-details">
+                          <summary>
+                            ${translateText("agents.event_details")}
+                          </summary>
+                          <pre>${event.text}</pre>
+                          ${event.image
+                            ? html`<img
+                                class="vision-image"
+                                src=${event.image}
+                                alt=${translateText("agents.vision_image")}
+                                loading="lazy"
+                              />`
+                            : nothing}
+                        </details>
+                      </article>
+                    `;
+                  },
+                )}
           `}
     </section>
   `;

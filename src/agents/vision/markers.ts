@@ -36,6 +36,8 @@ export function drawUnitMarkers(
   mapPixels: Region,
   occupied: Region[],
   self?: Player,
+  tradeRoutes = false,
+  units = true,
 ) {
   const position = (tile: number) => ({
     x:
@@ -86,6 +88,7 @@ export function drawUnitMarkers(
     : [];
   // A dashed cue joins public positions. It does not expose a sailing path.
   for (const ship of traffic) {
+    if (!tradeRoutes) break;
     if (!ship.destination) continue;
     const point = position(game.ref(ship.x, ship.y));
     const target = position(game.ref(ship.destination.x, ship.destination.y));
@@ -147,6 +150,7 @@ export function drawUnitMarkers(
     }
   }
   for (const unit of game.units(Structures.types)) {
+    if (!units) break;
     if (!unit.isActive() || !inside(unit.tile())) continue;
     const point = position(unit.tile());
     const label = `${symbols[unit.type()]}${unit.level()}`;
@@ -190,6 +194,7 @@ export function drawUnitMarkers(
     occupied.push(box);
   }
   for (const unit of ships) {
+    if (!units) break;
     if (!self && unit.type() !== UnitType.TradeShip) continue;
     const point = position(unit.tile());
     for (let y = point.y - 4; y <= point.y + 6; y++)
@@ -235,6 +240,7 @@ export function drawUnitMarkers(
   }
   for (const ship of traffic) {
     const label = `S${ship.id}/${ship.ownerSmallId}${affiliationSymbols[ship.affiliation]}`;
+    if (!units) break;
     const width = label.length * 6 + 4;
     if (width > mapPixels.width || mapPixels.height < 11) continue;
     const point = position(game.ref(ship.x, ship.y));

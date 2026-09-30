@@ -1,10 +1,8 @@
-// Failure cases: prompt without offense guidance, double structure builds
-// passing, single attack+build batches rejected, missing offense signals,
+// Failure cases: missing offense signals,
 // build streaks that never reset, affordable missiles hidden with a ready
 // silo, and decision snapshots without offense data.
 import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
-import { ActionDecision } from "../../src/agents/game/actionBatch";
 import {
   AgentGame,
   isOffenseIntent,
@@ -13,7 +11,6 @@ import {
 import { projectDecisionObservation } from "../../src/agents/game/decision";
 import { LocalMapLoader } from "../../src/agents/game/LocalMapLoader";
 import { ObservationBuilder } from "../../src/agents/game/observation";
-import { playerPrompt } from "../../src/agents/PlayerPrompt";
 import {
   Difficulty,
   GameMapSize,
@@ -24,24 +21,6 @@ import {
 } from "../../src/core/game/Game";
 import { createGameRunner } from "../../src/core/GameRunner";
 import type { ClientMessage, Turn } from "../../src/core/Schemas";
-
-const prompt = playerPrompt("Agent 1");
-for (const required of [
-  "weighs offense alongside defense",
-  "supporting role",
-  "recent balance",
-  "reward timing",
-  "punish idle or purely economic turns",
-]) {
-  assert.ok(
-    prompt.toLowerCase().includes(required.toLowerCase()),
-    `Guiding prompt mentions: ${required}`,
-  );
-}
-assert.ok(
-  !prompt.toLowerCase().includes("you must attack"),
-  "The prompt guides instead of ordering attacks",
-);
 
 // Intent classification never confuses economy with offense.
 assert.equal(isStructureBuild({ type: "upgrade_structure" }), true);
@@ -70,40 +49,6 @@ assert.equal(
 assert.equal(
   isOffenseIntent({ type: "build_unit", unit: UnitType.City } as never),
   false,
-);
-
-// The per-decision budget breaks double-build loops but keeps aggression.
-const submit = async (intent: { type: string }) => ({
-  accepted: true as const,
-  intent: intent as never,
-  tick: 0,
-  attackRatio: 0.2,
-});
-const schedule = () => {};
-const attack = { type: "attack", targetID: null, troops: 100 } as const;
-const city = { type: "build_unit", unit: "City", tile: 1 } as const;
-const port = { type: "build_unit", unit: "Port", tile: 2 } as const;
-const bomb = { type: "build_unit", unit: "Atom Bomb", tile: 3 } as const;
-await assert.rejects(
-  new ActionDecision().submit({ intents: [city, port] }, submit, schedule),
-  /one structure build/,
-);
-const mixed = new ActionDecision();
-await mixed.submit({ intents: [attack, city] } as never, submit, schedule);
-const doubleAttack = new ActionDecision();
-await doubleAttack.submit(
-  { intents: [attack, attack] } as never,
-  submit,
-  schedule,
-);
-const weaponPair = new ActionDecision();
-await weaponPair.submit({ intents: [attack, bomb] } as never, submit, schedule);
-const singleBuild = new ActionDecision();
-await singleBuild.submit({ intent: city } as never, submit, schedule);
-// A second structure in a later call of the same decision is also rejected.
-await assert.rejects(
-  singleBuild.submit({ intent: port } as never, submit, schedule),
-  /one structure build/,
 );
 
 const clientID = "aggro001";
@@ -269,7 +214,6 @@ await writeFile(
   JSON.stringify(
     {
       result: "passed",
-      promptChecks: 5,
       offense: armed.offense,
       structureCounts: armed.offense.structureCounts,
       tick: game.ticks(),

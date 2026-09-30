@@ -3,6 +3,13 @@ import { resolve } from "node:path";
 import { Game, Player, PlayerType, UnitType } from "../../core/game/Game";
 import { NukePreview, samCoverage, trajectoryPoint } from "../game/nukePreview";
 import { drawUnitMarkers, TradeTrafficMarker } from "./markers";
+import { PlayerMarker, publicUnitMarkers } from "./metadata";
+import {
+  overlayKey,
+  resolveOverlays,
+  VisionLayers,
+  VisionOverlays,
+} from "./options";
 import { encodePng } from "./png";
 import { Color, Raster, Region } from "./raster";
 export type { Region } from "./raster";
@@ -15,6 +22,11 @@ export type MapImage = {
   region: Region;
   mapPixels: Region;
   tradeTraffic?: TradeTrafficMarker[];
+  detail: "high";
+  overlays: VisionLayers;
+  players: PlayerMarker[];
+  units: ReturnType<typeof publicUnitMarkers>["units"];
+  unitCount: number;
 };
 export type MapVision = {
   tick: number;
@@ -26,6 +38,10 @@ type Frame = {
   region: Region;
   mapPixels: Region;
   tradeTraffic?: TradeTrafficMarker[];
+  overlays: VisionLayers;
+  players: PlayerMarker[];
+  units: ReturnType<typeof publicUnitMarkers>["units"];
+  unitCount: number;
 };
 
 const terrainColors: Color[] = Array.from({ length: 256 }, (_, terrain) => {
@@ -96,8 +112,9 @@ function draw(
   title: string,
   self?: Player,
   preview?: NukePreview,
+  overlays = resolveOverlays(),
 ): Frame {
-  const footer = preview ? 110 : self ? 99 : 66;
+  const footer = preview ? 88 : 66;
   const scale = Math.min(
     (limit - 44) / region.width,
     (limit - footer) / region.height,
@@ -150,6 +167,7 @@ function draw(
       if (game.hasFallout(tile)) color = [130, 110, 57];
       raster.pixel(mapPixels.x + px, mapPixels.y + py, color);
       if (
+        overlays.labels &&
         self &&
         owner !== 0 &&
         (owner === self.smallID() || friends.has(owner)) &&
@@ -172,9 +190,9 @@ function draw(
       mapPixels.height - 1,
       Math.floor((line * mapPixels.height) / 4),
     );
-    for (let y = 0; y < mapPixels.height; y += 3)
+    for (let y = 0; overlays.grid && y < mapPixels.height; y += 3)
       raster.pixel(mapPixels.x + px, mapPixels.y + y, [160, 175, 183]);
-    for (let x = 0; x < mapPixels.width; x += 3)
+    for (let x = 0; overlays.grid && x < mapPixels.width; x += 3)
       raster.pixel(mapPixels.x + x, mapPixels.y + py, [160, 175, 183]);
     raster.text(
       String(
@@ -223,7 +241,7 @@ function draw(
       mapPixels,
     );
   };
-  if (self)
+  if (self && (overlays.sam || preview))
     for (const sam of preview?.sams ?? samCoverage(game, self))
       circle(
         sam.x,
@@ -265,8 +283,10 @@ function draw(
   const players = [...game.allPlayers()].sort(
     (a, b) => priority(a) - priority(b) || a.smallID() - b.smallID(),
   );
+  const playerMarkers: PlayerMarker[] = [];
   for (const player of players) {
-    if (occupied.length >= (self ? 24 : 48)) break;
+    if (!overlays.labels) break;
+    if (occupied.length >= 24) break;
     const center = centers.get(player.smallID());
     const spawn = player.spawnTile();
     if (!center && (spawn === undefined || !inside(spawn) || !player.isAlive()))
@@ -283,11 +303,7 @@ function draw(
         : player.type() === PlayerType.Nation
           ? "N"
           : "T";
-    const label =
-      `${player === self ? "YOU " : self?.isOnSameTeam(player) ? "TEAM " : self?.isAlliedWith(player) ? "ALLY " : ""}${type}${player.smallID()} ${player.displayName()}`.slice(
-        0,
-        self ? 26 : 21,
-      );
+    const label = `${player === self ? "YOU " : self?.isOnSameTeam(player) ? "TEAM " : self?.isAlliedWith(player) ? "ALLY " : ""}${type}${player.smallID()}`;
     const box = {
       x: Math.max(
         mapPixels.x,
@@ -313,6 +329,7 @@ function draw(
       )
     )
       continue;
+    if (box.width > mapPixels.width || box.height > mapPixels.height) continue;
     raster.fill(box.x, box.y, box.width, box.height, [18, 26, 35]);
     raster.text(
       label,
@@ -321,32 +338,44 @@ function draw(
       player === self ? [255, 241, 116] : [242, 247, 252],
     );
     occupied.push(box);
+    // Include a public owned tile because a centroid can lie outside territory.
+    let tile: number | undefined;
+    for (const owned of player.tiles()) {
+      if (inside(owned)) {
+        tile = owned;
+        break;
+      }
+    }
+    if (tile !== undefined)
+      playerMarkers.push({
+        label,
+        playerId: player.id(),
+        smallId: player.smallID(),
+        color: colors.get(player.smallID())!,
+        tile,
+        x: game.x(tile),
+        y: game.y(tile),
+      });
   }
-  const tradeTraffic = drawUnitMarkers(
-    game,
-    raster,
-    region,
-    mapPixels,
-    occupied,
-    self,
-  );
-  if (self) {
+  const tradeTraffic =
+    overlays.units || overlays.tradeRoutes
+      ? drawUnitMarkers(
+          game,
+          raster,
+          region,
+          mapPixels,
+          occupied,
+          self,
+          overlays.tradeRoutes,
+          overlays.units,
+        )
+      : [];
+  if (self && overlays.labels)
     raster.text(
-      "YOU YELLOW ALLY CYAN W WARSHIP B BOAT",
-      36,
-      raster.height - (preview ? 45 : 34),
+      "YOU YELLOW ALLY CYAN H HUMAN N NATION T TRIBE",
+      8,
+      raster.height - 34,
     );
-    raster.text(
-      "S ID/OWNER Y SELF T TEAM A ALLY O OTHER",
-      36,
-      raster.height - (preview ? 67 : 56),
-    );
-    raster.text(
-      "DASH TO PORT ONLY - NOT WATER PATH",
-      36,
-      raster.height - (preview ? 56 : 45),
-    );
-  }
   if (preview) {
     circle(
       preview.target.x,
@@ -404,24 +433,44 @@ function draw(
       raster.height - 34,
     );
   }
-  raster.text(
-    self ? "H HUMAN  N NATION  T TRIBE" : "H HUMAN N NATION T TRIBE S TRADE",
-    36,
-    raster.height - 23,
-  );
-  raster.text(
-    "C CITY P PORT F FACTORY D DEF A SAM M SILO",
-    36,
-    raster.height - 12,
-  );
-  return { raster, region, mapPixels, ...(self ? { tradeTraffic } : {}) };
+  if (overlays.units) {
+    raster.text(
+      "C CITY P PORT F FACTORY D DEF A SAM M SILO",
+      8,
+      raster.height - 23,
+    );
+    raster.text(
+      "W WARSHIP B BOAT S TRADE - NUMBER IS LEVEL",
+      8,
+      raster.height - 12,
+    );
+  }
+  const units = overlays.units
+    ? publicUnitMarkers(game, region, self)
+    : { units: [], unitCount: 0 };
+  return {
+    raster,
+    region,
+    mapPixels,
+    overlays,
+    players: playerMarkers,
+    ...units,
+    ...(self && (overlays.units || overlays.tradeRoutes)
+      ? { tradeTraffic }
+      : {}),
+  };
 }
 
 /** One overview per tick serves every seat. Crops include only public map data. */
 export class MapImages {
   private directory: string;
   private ready: Promise<void>;
-  private overview?: { game: Game; tick: number; image: Promise<MapImage> };
+  private overview?: {
+    game: Game;
+    tick: number;
+    key: string;
+    image: Promise<MapImage>;
+  };
 
   constructor(private gameId: string) {
     this.directory = resolve(".agent-arena/frames", gameId);
@@ -430,20 +479,34 @@ export class MapImages {
     );
   }
 
-  async render(game: Game, player: Player): Promise<MapVision> {
+  async render(
+    game: Game,
+    player: Player,
+    options?: VisionOverlays,
+  ): Promise<MapVision> {
     const tick = game.ticks();
-    if (this.overview?.game !== game || this.overview.tick !== tick) {
+    const overlays = resolveOverlays(options);
+    const key = overlayKey(overlays);
+    if (
+      this.overview?.game !== game ||
+      this.overview.tick !== tick ||
+      this.overview.key !== key
+    ) {
       this.overview = {
         game,
         tick,
+        key,
         image: this.save(
           draw(
             game,
             { x: 0, y: 0, width: game.width(), height: game.height() },
             768,
             `WORLD TICK ${tick}`,
+            undefined,
+            undefined,
+            overlays,
           ),
-          `overview-${tick}.png`,
+          `overview-${tick}-${key}.png`,
         ),
       };
     }
@@ -451,8 +514,16 @@ export class MapImages {
     const region = playerTerritoryRegion(game, player);
     const tactical = region
       ? this.save(
-          draw(game, region, 512, `TACTICAL TICK ${tick}`, player),
-          `player-${player.smallID()}-${tick}.png`,
+          draw(
+            game,
+            region,
+            512,
+            `TACTICAL TICK ${tick}`,
+            player,
+            undefined,
+            overlays,
+          ),
+          `player-${player.smallID()}-${tick}-${key}.png`,
         )
       : undefined;
     return {
@@ -467,11 +538,21 @@ export class MapImages {
     game: Game,
     player: Player,
     region: Region,
+    options?: VisionOverlays,
   ): Promise<MapImage> {
     const tick = game.ticks();
+    const overlays = resolveOverlays(options);
     return this.save(
-      draw(game, region, 512, `REGION TICK ${tick}`, player),
-      `region-${player.smallID()}-${tick}-${region.x}-${region.y}-${region.width}-${region.height}.png`,
+      draw(
+        game,
+        region,
+        512,
+        `REGION TICK ${tick}`,
+        player,
+        undefined,
+        overlays,
+      ),
+      `region-${player.smallID()}-${tick}-${region.x}-${region.y}-${region.width}-${region.height}-${overlayKey(overlays)}.png`,
     );
   }
 
@@ -513,7 +594,16 @@ export class MapImages {
   }
 
   private async save(frame: Frame, name: string): Promise<MapImage> {
-    const { raster, region, mapPixels, tradeTraffic } = frame;
+    const {
+      raster,
+      region,
+      mapPixels,
+      tradeTraffic,
+      overlays,
+      players,
+      units,
+      unitCount,
+    } = frame;
     const png = await encodePng(raster.width, raster.height, raster.rgb);
     await this.ready;
     const path = resolve(this.directory, name);
@@ -525,6 +615,11 @@ export class MapImages {
       height: raster.height,
       region,
       mapPixels,
+      detail: "high",
+      overlays,
+      players,
+      units,
+      unitCount,
       ...(tradeTraffic ? { tradeTraffic } : {}),
     };
   }

@@ -1,7 +1,7 @@
 # Local agent arena
 
-The arena runs on this computer. It uses the local game server and the player's own model subscription: Codex (ChatGPT login) or OpenCode (any configured provider).
-It does not change the daily Codex configuration. Each player gets a separate persistent Codex thread or OpenCode session.
+The arena runs on this computer. It uses the local game server and the player's Codex subscription through ChatGPT login.
+It does not change the daily Codex configuration. Each player gets a separate persistent Codex thread.
 
 ## Failure cases to verify before implementation
 
@@ -22,7 +22,7 @@ It does not change the daily Codex configuration. Each player gets a separate pe
 - Show native input, cached input, cache-write input, output, and reasoning output for each agent and the combined list.
 - Treat cached input and reasoning output as subsets. Derive uncached input from input minus cached input.
 - Stop decisions after elimination or match completion.
-- Limit each decision to four tool calls and two actions. Interrupt a decision that exceeds a limit.
+- Allow action batches and repeated tool calls without an artificial per-decision quota. Enforce native game legality.
 - Reject attack ratios outside zero to one. Keep each player's ratio separate.
 - Apply the stored ratio when attack troops are null and report the resolved native troop count.
 - Keep private game events within the recipient's observation and thread.
@@ -35,7 +35,8 @@ Run `npm run dev:agents` to start the local game and arena. Run `npm run agents`
 Open `http://localhost:9000` and select **Agent lobby**.
 Choose the agent, tribe, and nation counts, then select **Play** or **Spectate**.
 The arena creates the lobby, joins the native page, and starts after the server confirms your selected role.
-Select a player to inspect its thread, tool calls, game events, and token usage.
+Select a player to read its decisions, actions, and token usage. Enable **Show diagnostics** to inspect raw runtime events and observations.
+The transcript follows new entries while you read the bottom. Scrolling up preserves your place. Select **Latest** to resume following.
 The agent list shows combined token usage. Each thread view shows only that player's token usage.
 Usage updates when Codex reports it. Scripted tests do not use model tokens.
 Expand **Usage breakdown** to inspect input, cached input, uncached input, output, and reasoning output.
@@ -53,14 +54,14 @@ For example, `act({nextDecisionSeconds: 2})` schedules an earlier check without 
 The agent can also include this field with a normal intent. The last request in that turn wins.
 Each later turn returns to the 10-second default unless the agent requests another delay.
 Agents continue until you pause or stop them, the match ends, or the subscription reports a limit.
-OpenCode matches run fewer concurrent turns and allow four minutes per decision, with two automatic retries on pool throttles, because the free pool answers slower than Codex.
-Each decision includes live overview and tactical map images with a small numeric snapshot.
-Agents play to attack: every decision snapshot carries an `offense` summary with attackable borders, rival borders, ready silos, affordable missiles, structure counts, and the consecutive-build streak.
-The prompt requires an attack, landing, or missile strike whenever one is legal, caps each decision at one structure build paired with offense, and orders a strike instead of hoarding gold while silos sit ready.
-The action bridge rejects a second structure build in the same decision with a steering error.
+Each decision includes a current tactical image and a small numeric snapshot. The first decision and periodic updates also include an overview.
+An `offense` summary reports border opportunities, ready silos, affordable missiles, structure counts, and the consecutive-build streak.
+Agents choose their own tactics. The prompt explains mechanics and encourages active competition without prescribing attacks or a build order.
+Agents can batch several builds or upgrades in one call. Native resources, placement rules, and cooldowns determine what executes.
 The bridge reads the latest native tick when a decision starts. Tick updates alone do not request model inference.
 It supplies only events newer than that agent's previous observation. Inspector logs stay local and are not appended to each prompt.
-Earlier decisions remain in the persistent Codex thread and can contribute cached input until native compaction.
+Earlier decisions remain in the persistent Codex thread. Native compaction starts at a configured 24,000-token threshold.
+The latest explicit strategy note accompanies each decision, so an agent can retain its goal after compaction.
 Agents can request focused data when they need exact tiles, costs, or communication choices.
 Each decision includes current build prices, including units the agent cannot yet afford.
 The action bridge checks native build legality before submission. Invalid builds report the required gold and current balance.
@@ -68,10 +69,10 @@ Troop transports use `boat`, so they do not appear as `build_unit` placement hin
 They also receive native victory progress and a short public leaderboard. A leaderboard query returns all living players and scoreboard columns.
 Border samples prefer attackable land over water, so the first entries are expansion targets rather than unreachable sea.
 Public trade observations and map cues identify ship owners, destination Ports, and owner or destination affiliations.
-Warship hints use legal water patrol targets. Agents can submit one or two native actions in a single `act` call.
-Batch actions share the existing per-decision allowance and return individual submission results.
+Warship hints use legal water patrol targets. Agents can submit multiple native actions in a single `act` call.
+Batch actions return individual submission results. A successful submission does not guarantee execution against a changing game state.
 The `think` tool records a short strategy note and can inspect a focused region in the same call.
-It keeps Low reasoning and the existing call allowance. Routine decisions can act directly.
+It keeps low reasoning. Routine decisions can act directly.
 They can request a regional image or inspect owned units and public enemy structures within that region.
 They can also focus an image on any human, nation, or tribe by its native player ID.
 Focused views show current public territory and keep the requesting agent's private information separate.
@@ -97,8 +98,7 @@ The driver checks the scheduler, then creates a scripted native lobby and submit
 It checks pause, resume, stop, settings, and localhost request boundaries.
 It writes a repeatable report to `.agent-arena/e2e-report.json`.
 Set `AGENT_E2E_COUNT=32` for a larger local check.
-Run `node node_modules/tsx/dist/cli.mjs tests/agents/aggression-e2e.ts` for the offense-doctrine check (prompt rules, one-build limit, streak tracking, missile readiness on the real engine).
-Run `node node_modules/tsx/dist/cli.mjs tests/agents/opencode-e2e.ts` for the OpenCode provider check (fake binary, no inference).
+Run `node node_modules/tsx/dist/cli.mjs tests/agents/aggression-e2e.ts` to check action combinations, streak tracking, and missile readiness on the real engine.
 Real Codex verification requires explicit `AGENT_E2E_CODEX=1`. It uses one Luna player and pauses after one decision.
 The test driver pauses after the first model decision and stops the arena during cleanup.
 Set `AGENT_E2E_COUNT` only when an explicit test allowance permits a larger Codex check.

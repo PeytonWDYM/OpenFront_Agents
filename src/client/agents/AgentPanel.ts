@@ -1,4 +1,4 @@
-import { LitElement, html, nothing } from "lit";
+import { LitElement, PropertyValues, html, nothing } from "lit";
 import { customElement, state } from "lit/decorators.js";
 import { LobbyInfoEvent } from "../../core/Schemas";
 import { translateText } from "../Utils";
@@ -18,6 +18,12 @@ import { agentPanelStyles } from "./AgentPanelStyles";
 import { agentPlayerList } from "./AgentPlayerList";
 import { agentTranscript, agentTranscriptControls } from "./AgentTranscript";
 import { agentTokenUsage, agentUsageBreakdown } from "./AgentUsage";
+import {
+  TranscriptPosition,
+  captureTranscriptPosition,
+  followsLatest,
+  restoreTranscriptPosition,
+} from "./TranscriptScroll";
 
 const panelOpenKey = "openfront.agentPanelOpen";
 const pendingGameKey = "openfront.agentPendingGame";
@@ -37,6 +43,9 @@ export class AgentPanel extends LitElement {
   @state() private selectedId: string | null = null;
   @state() private transcript: AgentTranscript | null = null;
   @state() private fullThread = false;
+  @state() private diagnostics = false;
+  @state() private following = true;
+  private transcriptPosition: TranscriptPosition | undefined;
   @state() private joinedGameId: string | null = null;
   @state() private joinedRole: AgentRole | null = null;
   @state() private joining = false;
@@ -49,6 +58,34 @@ export class AgentPanel extends LitElement {
   private pollTimer: ReturnType<typeof setTimeout> | undefined;
   private refreshInFlight = false;
   private readonly stopGameInput = (event: Event) => event.stopPropagation();
+
+  protected willUpdate(changed: PropertyValues): void {
+    if (changed.has("selectedId")) this.following = true;
+    this.transcriptPosition = undefined;
+    if (!this.following && changed.has("transcript")) {
+      const body = this.renderRoot.querySelector<HTMLElement>(".body");
+      if (body) this.transcriptPosition = captureTranscriptPosition(body);
+    }
+  }
+
+  protected updated(changed: PropertyValues): void {
+    if (this.selectedId === null || this.showSetup || !this.opened) return;
+    if (
+      !changed.has("transcript") &&
+      !changed.has("following") &&
+      !changed.has("diagnostics") &&
+      !changed.has("opened")
+    )
+      return;
+    const body = this.renderRoot.querySelector<HTMLElement>(".body")!;
+    if (this.following) body.scrollTop = body.scrollHeight;
+    else if (this.transcriptPosition)
+      restoreTranscriptPosition(body, this.transcriptPosition);
+  }
+
+  private trackScroll(event: Event): void {
+    this.following = followsLatest(event.currentTarget as HTMLElement);
+  }
 
   connectedCallback(): void {
     super.connectedCallback();
@@ -325,9 +362,7 @@ export class AgentPanel extends LitElement {
                 ${translateText(
                   lobby.settings.mode === "codex"
                     ? "agents.model"
-                    : lobby.settings.mode === "opencode"
-                      ? "agents.model_opencode"
-                      : "agents.scripted_mode",
+                    : "agents.scripted_mode",
                 )}
               </div>
               <details class="usage-breakdown">
@@ -378,6 +413,14 @@ export class AgentPanel extends LitElement {
                       void this.mutate(
                         `/players/${encodeURIComponent(this.selectedId!)}/compact`,
                       ),
+                    diagnostics: this.diagnostics,
+                    setDiagnostics: (enabled) => {
+                      this.diagnostics = enabled;
+                    },
+                    following: this.following,
+                    followLatest: () => {
+                      this.following = true;
+                    },
                   })
                 : nothing}
             `
@@ -403,7 +446,7 @@ export class AgentPanel extends LitElement {
           : nothing}
       </details>
       ${this.selectedId !== null
-        ? agentTranscript(this.transcript, this.fullThread)
+        ? agentTranscript(this.transcript, this.fullThread, this.diagnostics)
         : agentPlayerList(lobby, (player) => void this.inspect(player))}
     `;
   }
@@ -414,9 +457,14 @@ export class AgentPanel extends LitElement {
         ${translateText("agents.title")}
       </button>`;
     return html`
-      <section class="panel" aria-label=${translateText("agents.title")}>
+      <section
+        class="panel ${!this.showSetup && this.selectedId !== null
+          ? "inspecting"
+          : ""}"
+        aria-label=${translateText("agents.title")}
+      >
         ${this.renderHeader(this.lobby)}
-        <div class="body">
+        <div class="body" @scroll=${this.trackScroll}>
           ${this.error
             ? html`<p class="error" role="alert">${this.error}</p>`
             : nothing}
