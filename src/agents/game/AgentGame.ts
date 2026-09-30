@@ -23,10 +23,11 @@ import { MapImages, playerTerritoryRegion } from "../vision";
 import { VisionOverlays, VisionResolution } from "../vision/options";
 import { LocalMapLoader } from "./LocalMapLoader";
 import { PlayerSocket } from "./PlayerSocket";
+import { assertAgentAction } from "./actionLegality";
 import { assertAgentBuild, assertAgentUpgrade } from "./buildLegality";
 import { agentGameConfig, AgentGameConfigOptions } from "./config";
 import { projectDecisionObservation } from "./decision";
-import { playerEvents } from "./events";
+import { NuclearEventHistory, playerEvents, selectAgentEvents } from "./events";
 import { DecisionFeedback } from "./feedback";
 import { assertAgentNuclearTarget } from "./nuclearTargeting";
 import { buildNukePreview, NukePreviewRequest } from "./nukePreview";
@@ -41,6 +42,7 @@ import {
   ObserveQuery,
   ObserveQuerySchema,
 } from "./schemas";
+import { buildTradeHeatmap } from "./tradeHeatmap";
 
 const ADMIN_KEY = "WARNING_DEV_ADMIN_BOT_KEY_DO_NOT_USE_IN_PRODUCTION";
 // Structure builds grow economy or defense. Weapon builds (nukes, warships)
@@ -122,6 +124,7 @@ export class AgentGame {
   private histories = new Map<string, AgentEvent[]>();
   private incomingAttacks = new Map<string, Set<string>>();
   private allianceReminders = new Map<string, Map<number, number>>();
+  private nuclearHistories = new Map<string, NuclearEventHistory>();
   private attackRatios = new Map<string, number>();
   private buildStreaks = new Map<string, number>();
   private spawnRelocations = new Map<string, number>();
@@ -184,6 +187,7 @@ export class AgentGame {
 
   async create(): Promise<{ gameId: string; workerId: number }> {
     if (this.gameId_) throw new Error("The agent lobby already exists");
+    this.nuclearHistories.clear();
     const lobby = LobbyResponseSchema.parse(
       await this.admin("/api/adminbot/create_game", this.config),
     );
@@ -205,6 +209,10 @@ export class AgentGame {
       this.histories.set(id, []);
       this.incomingAttacks.set(id, new Set());
       this.allianceReminders.set(id, new Map());
+      this.nuclearHistories.set(id, {
+        launched: new Set(),
+        impacted: new Set(),
+      });
       this.attackRatios.set(id, 0.2);
       this.buildStreaks.set(id, 0);
     }
@@ -336,13 +344,18 @@ export class AgentGame {
         update.updates,
         this.incomingAttacks.get(seat.id)!,
         this.allianceReminders.get(seat.id)!,
+        this.nuclearHistories.get(seat.id)!,
       );
       this.feedback!.recordEvents(player, events);
       const history = this.histories.get(seat.id)!;
       history.push(...events);
       this.histories.set(
         seat.id,
-        history.filter((event) => event.at >= Date.now() - 60_000).slice(-128),
+        selectAgentEvents(
+          history.filter((event) => event.at >= Date.now() - 60_000),
+          128,
+          player.id(),
+        ),
       );
       for (const event of events)
         this.options.onEvent?.({ ...event, agentId: seat.id });
@@ -495,6 +508,25 @@ export class AgentGame {
     return publicPlayerFocus(this.runner!.game, viewer, playerId);
   }
 
+  async visionTradeHeatmap(
+    agentId: string,
+    region?: { x: number; y: number; width: number; height: number },
+    overlays?: VisionOverlays,
+    resolution: VisionResolution = "high",
+  ) {
+    const player = this.player(agentId);
+    const heatmap = buildTradeHeatmap(this.runner!.game, player, region);
+    const frame = await this.mapImages!.renderTradeHeatmap(
+      this.runner!.game,
+      player,
+      heatmap,
+      overlays,
+      resolution,
+    );
+    const { bins, ...metadata } = heatmap;
+    return { frame, metadata: { ...metadata, occupiedBins: bins.length } };
+  }
+
   async visionNukePreview(
     agentId: string,
     request: NukePreviewRequest,
@@ -512,6 +544,10 @@ export class AgentGame {
       frame,
       metadata: {
         type: preview.type,
+        cost: preview.cost,
+        canBuildReason: preview.canBuildReason,
+        readySilos: preview.readySilos,
+        sams: preview.sams,
         rocketDirectionUp: preview.rocketDirectionUp,
         target: preview.target,
         source: preview.source,
@@ -567,13 +603,14 @@ export class AgentGame {
       intent = { type: "spawn", tile: intent.tile };
     }
     if (intent.type === "build_unit") {
-      if (
-        !PlayerBuildable.has(intent.unit) ||
-        intent.unit === UnitType.TransportShip
-      )
+      if (intent.unit === UnitType.TradeShip || intent.unit === UnitType.Train)
         throw new Error(
-          "This unit spawns through its parent structure. Use the boat intent for troop transports.",
+          "Trade Ships and Trains spawn automatically from completed Ports and Factories. Build or upgrade those structures.",
         );
+      if (intent.unit === UnitType.TransportShip)
+        throw new Error("Use the boat intent to launch troop transports.");
+      if (!PlayerBuildable.has(intent.unit))
+        throw new Error("This unit cannot be built directly.");
       const game = this.runner!.game;
       assertAgentNuclearTarget(game, player, intent.unit, intent.tile);
       assertAgentBuild(game, player, intent.unit, intent.tile);
@@ -586,6 +623,7 @@ export class AgentGame {
       (intent.type === "boat" && attackRatio !== undefined)
     )
       intent = { ...intent, troops: player.troops() * ratio };
+    assertAgentAction(this.runner!.game, player, intent);
     this.seat(agentId).send({ type: "intent", intent });
     this.feedback!.recordSubmitted(player, intent);
     this.attackRatios.set(agentId, ratio);
@@ -594,6 +632,8 @@ export class AgentGame {
       this.buildStreaks.set(agentId, (this.buildStreaks.get(agentId) ?? 0) + 1);
     return {
       accepted: true as const,
+      status: "submitted" as const,
+      execution: "pending execution" as const,
       tick: this.runner!.game.ticks(),
       intent,
       attackRatio: ratio,

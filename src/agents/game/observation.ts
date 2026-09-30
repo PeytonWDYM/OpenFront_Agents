@@ -9,10 +9,14 @@ import {
   UnitType,
 } from "../../core/game/Game";
 import { requestedBuildSites } from "./buildSites";
+import { selectAgentEvents } from "./events";
 import { MatchStats } from "./matchStats";
+import { militaryIntel } from "./militaryIntel";
 import { publicTradeTraffic, warshipBuildSite } from "./naval";
+import { ownedUnitView } from "./ownedUnitView";
 import { AgentEvent, AgentObservation, ObserveQuery } from "./schemas";
 import { SpawnSiteFinder } from "./spawnSites";
+import { requestedWarshipBuildSites } from "./tradeHeatmap";
 
 const buildableTypes = PlayerBuildable.types.filter(
   (type) => type !== UnitType.TransportShip,
@@ -54,6 +58,11 @@ export class ObservationBuilder {
     buildStreak = 0,
   ): AgentObservation {
     const game = this.game;
+    const visibleEvents = selectAgentEvents(
+      events.filter((event) => event.at >= Date.now() - 60_000),
+      query.sections?.includes("events") ? 64 : 24,
+      player.id(),
+    );
     const point = (tile: number) => ({
       tile,
       x: game.x(tile),
@@ -78,7 +87,7 @@ export class ObservationBuilder {
         .map((request) => request.requestor().id()),
       ...player.allies().map((ally) => ally.id()),
     ]);
-    for (const event of events.slice(-12)) {
+    for (const event of visibleEvents) {
       const other =
         event.data.otherPlayerId ??
         event.data.requestor ??
@@ -148,7 +157,9 @@ export class ObservationBuilder {
     const requestedSites =
       query.buildType === undefined
         ? undefined
-        : requestedBuildSites(game, player, query);
+        : query.buildType === UnitType.Warship
+          ? requestedWarshipBuildSites(game, player, query)
+          : requestedBuildSites(game, player, query);
     const warship =
       query.buildType === undefined
         ? warshipBuildSite(game, player, reference)
@@ -158,6 +169,11 @@ export class ObservationBuilder {
       if (requestedSites) break;
       for (const buildable of player.buildableUnits(tile, buildableTypes)) {
         if (buildable.canBuild === false && buildable.canUpgrade === false)
+          continue;
+        if (
+          Nukes.has(buildable.type) &&
+          game.ownerID(tile) === player.smallID()
+        )
           continue;
         if (
           buildSites.some(
@@ -285,6 +301,7 @@ export class ObservationBuilder {
       gameId: "",
       tick: game.ticks(),
       spawnPhase: game.inSpawnPhase(),
+      militaryIntel: militaryIntel(game, player),
       offense: {
         attackableBorders: borders.filter((border) => border.canAttack).length,
         rivalBorders: visibleRivals.filter((rival) =>
@@ -357,18 +374,11 @@ export class ObservationBuilder {
             id: attack.id(),
             attackerId: attack.attacker().id(),
           })),
-        units: player
-          .units()
-          .filter((unit) => !regionalUnits || withinRegion(unit.tile()))
-          .slice(0, 32)
-          .map((unit) => ({
-            id: unit.id(),
-            type: unit.type(),
-            tile: unit.tile(),
-            level: unit.level(),
-            canUpgrade: player.canUpgradeUnit(unit),
-            underConstruction: unit.isUnderConstruction(),
-          })),
+        ...ownedUnitView(
+          game,
+          player,
+          regionalUnits ? withinRegion : undefined,
+        ),
       },
       rivals: visibleRivals.map((rival) => ({
         playerId: rival.id(),
@@ -446,6 +456,7 @@ export class ObservationBuilder {
         buildSites: (requestedSites?.sites ?? buildSites.slice(0, 8)).map(
           (site) => ({ ...site, ...point(site.tile) }),
         ),
+        buildSitesAtTick: game.ticks(),
         ...(requestedSites
           ? { buildSitesTruncated: requestedSites.truncated }
           : {}),
@@ -465,9 +476,7 @@ export class ObservationBuilder {
           cost: Number(game.config().unitInfo(type).cost(game, player)),
         })),
       },
-      events: events
-        .filter((event) => event.at >= Date.now() - 60_000)
-        .slice(-12),
+      events: visibleEvents,
     };
   }
 }

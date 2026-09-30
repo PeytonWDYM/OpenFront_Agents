@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { Game, Player, PlayerType, UnitType } from "../../core/game/Game";
 import { NukePreview, samCoverage, trajectoryPoint } from "../game/nukePreview";
 import type { AgentObservation } from "../game/schemas";
+import type { TradeHeatmap } from "../game/tradeHeatmap";
 import { drawPortBuildSites, PortSiteMarker } from "./buildSites";
 import { drawUnitLegend } from "./icons";
 import {
@@ -21,6 +22,7 @@ import {
 } from "./options";
 import { encodePng } from "./png";
 import { Color, Raster, Region } from "./raster";
+import { drawTradeHeatmap } from "./tradeHeatmap";
 export { VisionResolutionSchema } from "./options";
 export type { VisionResolution } from "./options";
 export type { Region } from "./raster";
@@ -35,6 +37,7 @@ export type MapImage = {
   mapPixels: Region;
   tradeTraffic?: TradeTrafficMarker[];
   buildSites?: PortSiteMarker[];
+  tradeHeatmap?: ReturnType<typeof drawTradeHeatmap>;
   detail: "high";
   overlays: VisionLayers;
   players: PlayerMarker[];
@@ -55,6 +58,7 @@ type Frame = {
   mapPixels: Region;
   tradeTraffic?: TradeTrafficMarker[];
   buildSites?: PortSiteMarker[];
+  tradeHeatmap?: ReturnType<typeof drawTradeHeatmap>;
   overlays: VisionLayers;
   players: PlayerMarker[];
   units: ReturnType<typeof publicUnitMarkers>["units"];
@@ -135,8 +139,9 @@ function draw(
   overlays = resolveOverlays(),
   buildSites?: AgentObservation["map"]["buildSites"],
   resolution: VisionResolution = "high",
+  heatmap?: TradeHeatmap,
 ): Frame {
-  const footer = preview || buildSites ? 150 : 128;
+  const footer = (preview || buildSites ? 150 : 128) + (heatmap ? 36 : 0);
   const scale = Math.min(
     (limit - 44) / region.width,
     (limit - footer) / region.height,
@@ -263,6 +268,17 @@ function draw(
       mapPixels,
     );
   };
+  const tradeHeatmap = heatmap
+    ? drawTradeHeatmap(
+        raster,
+        game,
+        region,
+        mapPixels,
+        heatmap,
+        raster.height - 128,
+        overlays.warships,
+      )
+    : undefined;
   if (self && (overlays.sam || preview))
     for (const sam of preview?.sams ?? samCoverage(game, self))
       circle(
@@ -476,6 +492,7 @@ function draw(
     players: playerMarkers,
     ...units,
     ...(siteMarkers ? { buildSites: siteMarkers } : {}),
+    ...(tradeHeatmap ? { tradeHeatmap } : {}),
     ...(self && (overlays.tradeShips || overlays.tradeRoutes)
       ? { tradeTraffic }
       : {}),
@@ -628,6 +645,35 @@ export class MapImages {
     );
   }
 
+  async renderTradeHeatmap(
+    game: Game,
+    player: Player,
+    heatmap: TradeHeatmap,
+    options?: VisionOverlays,
+    resolution: VisionResolution = "high",
+  ): Promise<MapImage> {
+    const overlays = resolveOverlays(options);
+    const region = heatmap.region;
+    return this.save(
+      draw(
+        game,
+        region,
+        imageLimit(
+          resolution,
+          region.width === game.width() && region.height === game.height(),
+        ),
+        `TRADE SNAPSHOT TICK ${game.ticks()}`,
+        player,
+        undefined,
+        overlays,
+        undefined,
+        resolution,
+        heatmap,
+      ),
+      `trade-${player.smallID()}-${game.ticks()}-${region.x}-${region.y}-${region.width}-${region.height}-${overlayKey(overlays)}-${resolution}.png`,
+    );
+  }
+
   private async save(frame: Frame, name: string): Promise<MapImage> {
     const {
       raster,
@@ -635,6 +681,7 @@ export class MapImages {
       mapPixels,
       tradeTraffic,
       buildSites,
+      tradeHeatmap,
       overlays,
       players,
       units,
@@ -664,6 +711,7 @@ export class MapImages {
       unitGroupCount,
       ...(tradeTraffic ? { tradeTraffic } : {}),
       ...(buildSites ? { buildSites } : {}),
+      ...(tradeHeatmap ? { tradeHeatmap } : {}),
     };
   }
 }

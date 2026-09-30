@@ -95,7 +95,11 @@ export class SAMMissileExecution implements Execution {
             unit:
               INTERCEPTED_UNIT_TRANSLATION_KEYS[this.target.type()] ??
               this.target.type(),
+            missileType: this.target.type(),
+            targetTile: this.target.targetTile()!,
           },
+          this.target.id(),
+          this.target.owner().id(),
         );
         this.active = false;
         this.target.delete(true, this._owner);

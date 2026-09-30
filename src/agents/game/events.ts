@@ -4,9 +4,21 @@ import {
   GameUpdates,
   MessageType,
   Player,
+  UnitType,
 } from "../../core/game/Game";
 import { GameUpdateType as U } from "../../core/game/GameUpdates";
 import { AgentEvent, AgentGameEvent } from "./schemas";
+
+export interface NuclearEventHistory {
+  launched: Set<number>;
+  impacted: Set<number>;
+}
+const nuclearTypes = new Set([
+  UnitType.AtomBomb,
+  UnitType.HydrogenBomb,
+  UnitType.MIRV,
+  UnitType.MIRVWarhead,
+]);
 
 /** Project private native updates before they enter an agent's history. */
 export function playerEvents(
@@ -15,12 +27,65 @@ export function playerEvents(
   updates: GameUpdates,
   previousIncoming?: Set<string>,
   previousAllianceReminders?: Map<number, number>,
+  nuclearHistory?: NuclearEventHistory,
 ): AgentEvent[] {
   const events: AgentEvent[] = [];
   const self = player.smallID();
   const playerId = (id: number) => game.playerBySmallID(id).id();
   const add = (type: AgentEvent["type"], data: Record<string, unknown>) =>
     events.push({ type, tick: game.ticks(), at: Date.now(), data });
+  const publicImpacts = nuclearHistory?.impacted ?? new Set<number>();
+  const publicLaunches = nuclearHistory?.launched ?? new Set<number>();
+  const impactedPlayers = new Map<number, ReturnType<typeof playerId>[]>();
+  for (const event of updates[U.DisplayEvent]) {
+    if (
+      event.messageType !== MessageType.NUKE_DETONATED ||
+      event.unitID === undefined ||
+      event.playerID === null
+    )
+      continue;
+    const recipients = impactedPlayers.get(event.unitID) ?? [];
+    recipients.push(playerId(event.playerID));
+    impactedPlayers.set(event.unitID, recipients);
+  }
+  if (nuclearHistory) {
+    for (const unit of updates[U.Unit]) {
+      if (!nuclearTypes.has(unit.unitType)) continue;
+      const missile = {
+        unitId: unit.id,
+        attackerId: playerId(unit.ownerID),
+        missileType: unit.unitType,
+        targetTile: unit.targetTile,
+      };
+      if (unit.isActive && !publicLaunches.has(unit.id)) {
+        publicLaunches.add(unit.id);
+        const incoming = updates[U.UnitIncoming].find(
+          (event) => event.unitID === unit.id,
+        );
+        add("global_nuke_launch", {
+          ...missile,
+          recipientId:
+            incoming && incoming.playerID !== null
+              ? playerId(incoming.playerID)
+              : undefined,
+        });
+      }
+      // Native detonation sets reachedTarget before deletion. SAM hits and
+      // carrier separation leave it false, so neither is an impact.
+      if (
+        !unit.isActive &&
+        unit.reachedTarget &&
+        unit.unitType !== UnitType.MIRV &&
+        !publicImpacts.has(unit.id)
+      ) {
+        publicImpacts.add(unit.id);
+        add("global_nuke_impact", {
+          ...missile,
+          impactedPlayerIds: impactedPlayers.get(unit.id) ?? [],
+        });
+      }
+    }
+  }
   if (
     !game.inSpawnPhase() &&
     updates[U.Player].some(
@@ -77,6 +142,45 @@ export function playerEvents(
       });
   }
   for (const event of updates[U.DisplayEvent]) {
+    if (event.messageType === MessageType.SAM_HIT) {
+      // The native notice goes to the interceptor. Its focus identifies the shooter.
+      if (event.playerID === self || event.focusPlayerID === self) {
+        add("missile_intercepted", {
+          unitId: event.unitID,
+          attackerId:
+            event.focusPlayerID === undefined
+              ? undefined
+              : playerId(event.focusPlayerID),
+          interceptorId:
+            event.playerID === null ? undefined : playerId(event.playerID),
+          missileType: event.params?.missileType,
+          targetTile: event.params?.targetTile,
+        });
+      }
+      continue;
+    }
+    if (
+      event.messageType === MessageType.NUKE_DETONATED &&
+      event.unitID !== undefined &&
+      !publicImpacts.has(event.unitID)
+    ) {
+      publicImpacts.add(event.unitID);
+      add("global_nuke_impact", {
+        unitId: event.unitID,
+        attackerId:
+          event.focusPlayerID === undefined
+            ? undefined
+            : playerId(event.focusPlayerID),
+        missileType: event.params?.missileType,
+        targetTile: event.params?.targetTile,
+        impactedPlayerIds: impactedPlayers.get(event.unitID) ?? [],
+      });
+    }
+    if (
+      event.messageType === MessageType.NUKE_DETONATED &&
+      event.playerID !== self
+    )
+      continue;
     if (event.playerID === null || event.playerID === self) {
       if (
         event.playerID === self &&
@@ -101,6 +205,13 @@ export function playerEvents(
         {
           message: event.message,
           params: event.params,
+          ...(event.messageType === MessageType.NUKE_DETONATED
+            ? {
+                unitId: event.unitID,
+                missileType: event.params?.missileType,
+                targetTile: event.params?.targetTile,
+              }
+            : {}),
           ...(event.messageType === MessageType.NUKE_DETONATED &&
           event.focusPlayerID !== undefined
             ? { attackerId: playerId(event.focusPlayerID) }
@@ -165,27 +276,40 @@ export function playerEvents(
       });
   }
   for (const event of updates[U.UnitIncoming]) {
+    const nuclear =
+      event.messageType === MessageType.NUKE_INBOUND ||
+      event.messageType === MessageType.HYDROGEN_BOMB_INBOUND ||
+      event.messageType === MessageType.MIRV_INBOUND;
+    const unit = game.unit(event.unitID);
+    const update = updates[U.Unit].find((update) => update.id === event.unitID);
+    const missile = {
+      unitId: event.unitID,
+      missileType: unit?.type() ?? update?.unitType,
+      attackerId:
+        unit?.owner().id() ?? (update ? playerId(update.ownerID) : undefined),
+      targetTile: unit?.targetTile() ?? update?.targetTile,
+    };
+    if (nuclear && !publicLaunches.has(event.unitID)) {
+      publicLaunches.add(event.unitID);
+      add("global_nuke_launch", {
+        ...missile,
+        recipientId:
+          event.playerID === null ? undefined : playerId(event.playerID),
+      });
+    }
     if (event.playerID === self) {
-      const unit = game.unit(event.unitID);
-      add(
-        event.messageType === MessageType.NUKE_INBOUND ||
-          event.messageType === MessageType.HYDROGEN_BOMB_INBOUND ||
-          event.messageType === MessageType.MIRV_INBOUND
-          ? "nuke_incoming"
-          : "unit_incoming",
-        {
-          unitId: event.unitID,
-          message: event.message,
-          messageType: event.messageType,
-          ...(unit
-            ? {
-                unitType: unit.type(),
-                attackerId: unit.owner().id(),
-                targetTile: unit.targetTile(),
-              }
-            : {}),
-        },
-      );
+      add(nuclear ? "nuke_incoming" : "unit_incoming", {
+        ...missile,
+        message: event.message,
+        messageType: event.messageType,
+        ...(unit
+          ? {
+              unitType: unit.type(),
+              attackerId: unit.owner().id(),
+              targetTile: unit.targetTile(),
+            }
+          : {}),
+      });
     }
   }
   for (const event of updates[U.TargetPlayer]) {
@@ -247,6 +371,8 @@ export function isUrgentAgentEvent(
     case "alliance_extension_request":
     case "alliance_renewal_available":
       return true;
+    case "missile_intercepted":
+      return event.data.attackerId === selfPlayerId;
     case "chat":
       return event.data.direction === "incoming";
     case "alliance_broken":
@@ -265,4 +391,32 @@ export function isUrgentAgentEvent(
     default:
       return false;
   }
+}
+
+/** Retain threats and diplomacy before routine map notices, preserving order. */
+export function selectAgentEvents<T extends AgentGameEvent>(
+  events: readonly T[],
+  limit: number,
+  selfPlayerId: string,
+): T[] {
+  if (limit <= 0) return [];
+  const priority = (event: T) =>
+    isUrgentAgentEvent(event, selfPlayerId) ||
+    event.type === "eliminated" ||
+    event.type === "win"
+      ? 3
+      : event.type === "alliance_extended" ||
+          event.type === "alliance_broken" ||
+          event.type === "missile_intercepted"
+        ? 2
+        : event.type === "global_nuke_launch" ||
+            event.type === "global_nuke_impact"
+          ? 1
+          : 0;
+  const selected = events
+    .map((event, index) => ({ event, index, priority: priority(event) }))
+    .sort((a, b) => b.priority - a.priority || b.index - a.index)
+    .slice(0, limit)
+    .sort((a, b) => a.index - b.index);
+  return selected.map(({ event }) => event);
 }

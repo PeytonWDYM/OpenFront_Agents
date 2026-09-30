@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { PlayerType, Structures } from "../../core/game/Game";
+import { PlayerType, Structures, UnitType } from "../../core/game/Game";
 import {
   AllianceExtensionIntentSchema,
   AllianceRejectIntentSchema,
@@ -25,7 +25,9 @@ import {
 } from "../../core/Schemas";
 import { flattenedEmojiTable } from "../../core/Util";
 import type { AgentMatchStats } from "./matchStats";
+import type { militaryIntel } from "./militaryIntel";
 import type { NavalAffiliation } from "./naval";
+import type { ownedUnitView } from "./ownedUnitView";
 import type { SpawnSite } from "./spawnSites";
 
 // Native player intents only. Strict objects reject forged sender fields.
@@ -169,10 +171,10 @@ export const ObserveQuerySchema = z
     height: z.number().int().min(1).max(32768).optional(),
     sections: z.array(z.enum(observationSections)).optional(),
     buildType: z
-      .enum(Structures.types)
+      .enum([...Structures.types, UnitType.Warship])
       .optional()
       .describe(
-        "Find distinct legal build or upgrade sites for this structure type.",
+        "Find current legal structure sites or Warship water patrol targets.",
       ),
   })
   .strict();
@@ -193,6 +195,9 @@ export interface AgentEvent {
     | "trade_ship_captured"
     | "nuke_incoming"
     | "nuke_impact"
+    | "missile_intercepted"
+    | "global_nuke_launch"
+    | "global_nuke_impact"
     | "eliminated"
     | "incoming_attack"
     | "attack_request"
@@ -220,6 +225,7 @@ export interface AgentObservation extends AgentMatchStats {
   gameId: string;
   tick: number;
   spawnPhase: boolean;
+  militaryIntel: ReturnType<typeof militaryIntel>;
   offense: {
     attackableBorders: number;
     rivalBorders: number;
@@ -248,14 +254,8 @@ export interface AgentObservation extends AgentMatchStats {
     incomingAllianceRequests: string[];
     outgoingAttacks: { id: string; targetId: string | null; troops: number }[];
     incomingAttacks: { id: string; attackerId: string }[];
-    units: {
-      id: number;
-      type: string;
-      tile: number;
-      level: number;
-      canUpgrade: boolean;
-      underConstruction: boolean;
-    }[];
+    units: ReturnType<typeof ownedUnitView>["units"];
+    unitSummary: ReturnType<typeof ownedUnitView>["unitSummary"];
   };
   rivals: {
     playerId: string;
@@ -344,8 +344,15 @@ export interface AgentObservation extends AgentMatchStats {
       y?: number;
       cost: number;
       upgradeId: number | false;
+      context?: {
+        launchPortId: number;
+        launchPortTile: number;
+        traffic: number;
+        eligibleTraffic: number;
+      };
     }[];
     buildSitesTruncated?: boolean;
+    buildSitesAtTick: number;
     portPlacement?: {
       terrain: "owned coastal land";
       requiresAdjacentWater: true;

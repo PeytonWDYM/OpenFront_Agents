@@ -504,8 +504,12 @@ export class NukeExecution implements Execution {
           MessageType.NUKE_DETONATED,
           impactedPlayer.id(),
           undefined,
-          { name: this.player.displayName() },
-          undefined,
+          {
+            name: this.player.displayName(),
+            missileType: this.nukeType,
+            targetTile: this.dst,
+          },
+          this.nuke.id(),
           this.player.id(),
         );
       }

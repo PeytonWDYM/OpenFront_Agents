@@ -76,6 +76,9 @@ export class MatchStats {
       .units(UnitType.Factory)
       .filter((unit) => !unit.isUnderConstruction());
     const destinations = new Map<number, Player>();
+    const ports = player
+      .units(UnitType.Port)
+      .filter((unit) => unit.isActive() && !unit.isUnderConstruction());
     let connectedFactories = 0;
     for (const factory of factories) {
       const cluster = game
@@ -92,6 +95,10 @@ export class MatchStats {
     return {
       economy: {
         ...this.incomeRates(player),
+        incomeWindowSeconds: 120 as const,
+        incomeBasis: "trailing native counters" as const,
+        completedPorts: ports.length,
+        activePortLevels: ports.reduce((sum, unit) => sum + unit.level(), 0),
         factories: factories.length,
         connectedFactories,
         trainTradeDestinations: destinations.size,

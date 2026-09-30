@@ -12,7 +12,7 @@ export function projectDecisionObservation(
 ) {
   const include = (section: NonNullable<ObserveQuery["sections"]>[number]) =>
     sections === undefined || sections.includes(section);
-  const { canSendEmojiAllPlayers, canEmbargoAll, units, ...self } =
+  const { canSendEmojiAllPlayers, canEmbargoAll, units, unitSummary, ...self } =
     observation.self;
   const {
     cells,
@@ -103,7 +103,9 @@ export function projectDecisionObservation(
           },
         }
       : {}),
-    ...(include("units") ? { units } : {}),
+    ...(include("units")
+      ? { units, unitSummary, militaryIntel: observation.militaryIntel }
+      : {}),
     ...(include("units") && publicStructures !== undefined
       ? { publicStructures }
       : {}),
